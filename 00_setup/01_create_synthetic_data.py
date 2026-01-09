@@ -396,7 +396,7 @@ print("  → Planting 18 high-risk patients (score > 0.7)...")
 high_risk_patients = random.sample(chf_copd_patient_ids, builtins.min(18, len(chf_copd_patient_ids)))
 
 for patient_id in high_risk_patients:
-    risk_score = round(random.uniform(0.71, 0.95), 3)
+    risk_score = builtins.round(random.uniform(0.71, 0.95), 3)
     risk_factors = random.sample([
         "Prior 30-day readmission",
         "CHF/COPD diagnosis",
@@ -422,7 +422,7 @@ used_patients = set(high_risk_patients)
 remaining_patients = [p for p in all_patient_ids if p not in used_patients]
 
 for patient_id in remaining_patients[:10_000 - len(high_risk_patients)]:
-    risk_score = round(random.triangular(0.1, 0.8, 0.3), 3)
+    risk_score = builtins.round(random.triangular(0.1, 0.8, 0.3), 3)
     category = "Low" if risk_score < 0.3 else "Moderate" if risk_score < 0.7 else "High"
 
     risk_scores_rows.append(Row(
