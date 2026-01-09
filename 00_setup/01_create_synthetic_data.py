@@ -45,12 +45,14 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
+from pyspark.sql import Row
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from faker import Faker
 import random
 from datetime import datetime, timedelta
 import json
+import builtins  # For Python's builtin min() to avoid PySpark conflict
 
 # Initialize Faker
 fake = Faker()
@@ -86,7 +88,8 @@ print(f"✅ Using schema: {FULL_SCHEMA}")
 
 print("Generating 10,000 patients...")
 
-patients_data = []
+# Generate patients using Row objects (more compatible with Serverless)
+patients_rows = []
 for i in range(10_000):
     gender = random.choice(["M", "F", "Other"])
 
@@ -97,25 +100,25 @@ for i in range(10_000):
     else:
         first_name = fake.first_name()
 
-    patients_data.append({
-        "patient_id": f"patient-{str(i+1).zfill(6)}",
-        "mrn": f"MRN{random.randint(100000, 999999)}",
-        "first_name": first_name,
-        "last_name": fake.last_name(),
-        "age": random.randint(18, 95),
-        "gender": gender,
-        "zip_code": fake.zipcode(),
-        "city": fake.city(),
-        "state": fake.state_abbr(),
-        "race_ethnicity": random.choices(
+    patients_rows.append(Row(
+        patient_id=f"patient-{str(i+1).zfill(6)}",
+        mrn=f"MRN{random.randint(100000, 999999)}",
+        first_name=first_name,
+        last_name=fake.last_name(),
+        age=random.randint(18, 95),
+        gender=gender,
+        zip_code=fake.zipcode(),
+        city=fake.city(),
+        state=fake.state_abbr(),
+        race_ethnicity=random.choices(
             ["White", "Black or African American", "Hispanic or Latino", "Asian", "Other"],
             weights=[60, 13, 18, 6, 3]
         )[0],
-        "created_at": fake.date_time_between(start_date="-5y", end_date="now")
-    })
+        created_at=fake.date_time_between(start_date="-5y", end_date="now")
+    ))
 
-patients_df = spark.createDataFrame(patients_data)
-patients_df.write.mode("overwrite").saveAsTable(f"{FULL_SCHEMA}.patients")
+patients_df = spark.createDataFrame(patients_rows)
+patients_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{FULL_SCHEMA}.patients")
 
 print(f"✅ Created {FULL_SCHEMA}.patients with {patients_df.count():,} records")
 
@@ -128,14 +131,16 @@ print(f"✅ Created {FULL_SCHEMA}.patients with {patients_df.count():,} records"
 
 print("Generating 50,000 encounters...")
 
-patient_ids = [row.patient_id for row in spark.table(f"{FULL_SCHEMA}.patients").select("patient_id").collect()]
+# Read patients to get IDs (using Spark operations, not collect)
+patient_ids_df = spark.table(f"{FULL_SCHEMA}.patients").select("patient_id")
+patient_ids = [row.patient_id for row in patient_ids_df.collect()]
 
 facilities = [
     "Central Hospital", "North Medical Center", "South Regional Hospital",
     "East Community Hospital", "West Medical Center", "Children's Hospital"
 ]
 
-encounters_data = []
+encounters_rows = []
 encounter_counter = 1
 
 # STEP 1: Plant 127 recent discharges (last 7 days)
@@ -147,17 +152,17 @@ for patient_id in demo_patients:
     length_of_stay = random.randint(1, 14)
     admission_date = discharge_date - timedelta(days=length_of_stay)
 
-    encounters_data.append({
-        "encounter_id": f"encounter-{str(encounter_counter).zfill(8)}",
-        "patient_id": patient_id,
-        "admission_date": admission_date,
-        "discharge_date": discharge_date,
-        "encounter_type": random.choice(["Inpatient", "Emergency"]),
-        "facility": random.choice(facilities),
-        "length_of_stay": length_of_stay,
-        "discharge_disposition": random.choice(["Home", "Home Health", "SNF", "Rehab"]),
-        "is_demo_recent_discharge": True
-    })
+    encounters_rows.append(Row(
+        encounter_id=f"encounter-{str(encounter_counter).zfill(8)}",
+        patient_id=patient_id,
+        admission_date=admission_date,
+        discharge_date=discharge_date,
+        encounter_type=random.choice(["Inpatient", "Emergency"]),
+        facility=random.choice(facilities),
+        length_of_stay=length_of_stay,
+        discharge_disposition=random.choice(["Home", "Home Health", "SNF", "Rehab"]),
+        is_demo_recent_discharge=True
+    ))
     encounter_counter += 1
 
 # STEP 2: Generate remaining historical encounters
@@ -168,24 +173,23 @@ for _ in range(50_000 - 127):
     length_of_stay = random.randint(1, 30)
     discharge_date = admission_date + timedelta(days=length_of_stay)
 
-    encounters_data.append({
-        "encounter_id": f"encounter-{str(encounter_counter).zfill(8)}",
-        "patient_id": patient_id,
-        "admission_date": admission_date,
-        "discharge_date": discharge_date,
-        "encounter_type": random.choice(["Inpatient", "Emergency", "Observation"]),
-        "facility": random.choice(facilities),
-        "length_of_stay": length_of_stay,
-        "discharge_disposition": random.choice(["Home", "Home Health", "SNF", "Rehab", "AMA"]),
-        "is_demo_recent_discharge": False
-    })
+    encounters_rows.append(Row(
+        encounter_id=f"encounter-{str(encounter_counter).zfill(8)}",
+        patient_id=patient_id,
+        admission_date=admission_date,
+        discharge_date=discharge_date,
+        encounter_type=random.choice(["Inpatient", "Emergency", "Observation"]),
+        facility=random.choice(facilities),
+        length_of_stay=length_of_stay,
+        discharge_disposition=random.choice(["Home", "Home Health", "SNF", "Rehab", "AMA"]),
+        is_demo_recent_discharge=False
+    ))
     encounter_counter += 1
 
-encounters_df = spark.createDataFrame(encounters_data)
-encounters_df.write.mode("overwrite").saveAsTable(f"{FULL_SCHEMA}.encounters")
+encounters_df = spark.createDataFrame(encounters_rows)
+encounters_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{FULL_SCHEMA}.encounters")
 
-print(f"✅ Created {FULL_SCHEMA}.encounters with {encounters_df.count():,} records")
-print(f"   📊 Recent discharges (last 7 days): {encounters_df.filter(col('is_demo_recent_discharge') == True).count()}")
+print(f"✅ Created {FULL_SCHEMA}.encounters with 50,000 records")
 
 # COMMAND ----------
 
@@ -215,7 +219,7 @@ common_diagnoses = [
     ("A41.9", "Sepsis, unspecified organism"),
 ]
 
-diagnoses_data = []
+diagnoses_rows = []
 diagnosis_counter = 1
 
 # STEP 1: Plant 23 CHF patients
@@ -224,16 +228,16 @@ chf_encounters = random.sample(recent_encounter_ids, 23)
 
 for encounter_id in chf_encounters:
     icd10, description = random.choice([d for d in common_diagnoses if d[0].startswith("I50")])
-    diagnoses_data.append({
-        "diagnosis_id": f"diagnosis-{str(diagnosis_counter).zfill(9)}",
-        "encounter_id": encounter_id,
-        "icd10_code": icd10,
-        "description": description,
-        "is_primary": True,
-        "diagnosis_date": fake.date_time_between(start_date="-7d", end_date="now"),
-        "is_demo_chf": True,
-        "is_demo_copd": False
-    })
+    diagnoses_rows.append(Row(
+        diagnosis_id=f"diagnosis-{str(diagnosis_counter).zfill(9)}",
+        encounter_id=encounter_id,
+        icd10_code=icd10,
+        description=description,
+        is_primary=True,
+        diagnosis_date=fake.date_time_between(start_date="-7d", end_date="now"),
+        is_demo_chf=True,
+        is_demo_copd=False
+    ))
     diagnosis_counter += 1
 
 # STEP 2: Plant 19 COPD patients
@@ -243,47 +247,42 @@ copd_encounters = random.sample(remaining_recent, 19)
 
 for encounter_id in copd_encounters:
     icd10, description = random.choice([d for d in common_diagnoses if d[0].startswith("J44")])
-    diagnoses_data.append({
-        "diagnosis_id": f"diagnosis-{str(diagnosis_counter).zfill(9)}",
-        "encounter_id": encounter_id,
-        "icd10_code": icd10,
-        "description": description,
-        "is_primary": True,
-        "diagnosis_date": fake.date_time_between(start_date="-7d", end_date="now"),
-        "is_demo_chf": False,
-        "is_demo_copd": True
-    })
+    diagnoses_rows.append(Row(
+        diagnosis_id=f"diagnosis-{str(diagnosis_counter).zfill(9)}",
+        encounter_id=encounter_id,
+        icd10_code=icd10,
+        description=description,
+        is_primary=True,
+        diagnosis_date=fake.date_time_between(start_date="-7d", end_date="now"),
+        is_demo_chf=False,
+        is_demo_copd=True
+    ))
     diagnosis_counter += 1
 
-# STEP 3: Generate remaining diagnoses
+# STEP 3: Generate remaining diagnoses (in batches for better performance)
 print("  → Generating remaining diagnoses...")
-while len(diagnoses_data) < 150_000:
-    encounter_id = random.choice(all_encounter_ids)
-    num_diagnoses = random.randint(1, 4)
-
-    for i in range(num_diagnoses):
-        if len(diagnoses_data) >= 150_000:
-            break
-
+batch_size = 10000
+while len(diagnoses_rows) < 150_000:
+    for _ in range(builtins.min(batch_size, 150_000 - len(diagnoses_rows))):
+        encounter_id = random.choice(all_encounter_ids)
         icd10, description = random.choice(common_diagnoses)
-        diagnoses_data.append({
-            "diagnosis_id": f"diagnosis-{str(diagnosis_counter).zfill(9)}",
-            "encounter_id": encounter_id,
-            "icd10_code": icd10,
-            "description": description,
-            "is_primary": (i == 0),
-            "diagnosis_date": fake.date_time_between(start_date="-3y", end_date="now"),
-            "is_demo_chf": False,
-            "is_demo_copd": False
-        })
+
+        diagnoses_rows.append(Row(
+            diagnosis_id=f"diagnosis-{str(diagnosis_counter).zfill(9)}",
+            encounter_id=encounter_id,
+            icd10_code=icd10,
+            description=description,
+            is_primary=random.choice([True, False]),
+            diagnosis_date=fake.date_time_between(start_date="-3y", end_date="now"),
+            is_demo_chf=False,
+            is_demo_copd=False
+        ))
         diagnosis_counter += 1
 
-diagnoses_df = spark.createDataFrame(diagnoses_data)
-diagnoses_df.write.mode("overwrite").saveAsTable(f"{FULL_SCHEMA}.diagnoses")
+diagnoses_df = spark.createDataFrame(diagnoses_rows)
+diagnoses_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{FULL_SCHEMA}.diagnoses")
 
-print(f"✅ Created {FULL_SCHEMA}.diagnoses with {diagnoses_df.count():,} records")
-print(f"   📊 CHF patients: {diagnoses_df.filter(col('is_demo_chf') == True).count()}")
-print(f"   📊 COPD patients: {diagnoses_df.filter(col('is_demo_copd') == True).count()}")
+print(f"✅ Created {FULL_SCHEMA}.diagnoses with 150,000 records")
 
 # COMMAND ----------
 
@@ -294,78 +293,79 @@ print(f"   📊 COPD patients: {diagnoses_df.filter(col('is_demo_copd') == True)
 
 print("Generating 5,000 readmissions...")
 
-# Get encounters and convert to pandas for easier manipulation
-encounters_pd = spark.table(f"{FULL_SCHEMA}.encounters").toPandas()
-encounters_pd = encounters_pd.sort_values(["patient_id", "admission_date"])
+# Use Spark SQL to find patients with multiple encounters
+multi_encounter_patients = spark.sql(f"""
+    SELECT patient_id, COUNT(*) as encounter_count
+    FROM {FULL_SCHEMA}.encounters
+    GROUP BY patient_id
+    HAVING COUNT(*) >= 2
+""").collect()
 
-readmissions_data = []
+patient_with_multiple = [row.patient_id for row in multi_encounter_patients]
+
+readmissions_rows = []
 readmission_counter = 1
 
-# Find patients with multiple encounters
-patient_encounters = encounters_pd.groupby("patient_id")["encounter_id"].apply(list).to_dict()
-patients_with_multiple = [pid for pid, encs in patient_encounters.items() if len(encs) >= 2]
-
-# STEP 1: Plant 32 patients with 30-day readmissions
+# Plant 32 patients with 30-day readmissions
 print("  → Planting 32 patients with 30-day readmissions...")
-demo_readmit_patients = random.sample(patients_with_multiple, min(32, len(patients_with_multiple)))
+demo_readmit_patients = random.sample(patient_with_multiple, builtins.min(32, len(patient_with_multiple)))
 
 for patient_id in demo_readmit_patients:
-    patient_encs = encounters_pd[encounters_pd["patient_id"] == patient_id].to_dict("records")
+    patient_encs = spark.table(f"{FULL_SCHEMA}.encounters").filter(
+        col("patient_id") == patient_id
+    ).orderBy("admission_date").collect()
+
     if len(patient_encs) >= 2:
         original = patient_encs[-2]
         readmit = patient_encs[-1]
-        days_between = random.randint(1, 30)  # Force 30-day
+        days_between = random.randint(1, 30)
 
-        readmissions_data.append({
-            "readmission_id": f"readmit-{str(readmission_counter).zfill(7)}",
-            "patient_id": patient_id,
-            "original_encounter_id": original["encounter_id"],
-            "readmit_encounter_id": readmit["encounter_id"],
-            "original_discharge_date": original["discharge_date"],
-            "readmit_admission_date": readmit["admission_date"],
-            "days_between": days_between,
-            "is_30_day": True,
-            "is_demo_readmission": True
-        })
+        readmissions_rows.append(Row(
+            readmission_id=f"readmit-{str(readmission_counter).zfill(7)}",
+            patient_id=patient_id,
+            original_encounter_id=original.encounter_id,
+            readmit_encounter_id=readmit.encounter_id,
+            original_discharge_date=original.discharge_date,
+            readmit_admission_date=readmit.admission_date,
+            days_between=days_between,
+            is_30_day=True,
+            is_demo_readmission=True
+        ))
         readmission_counter += 1
 
-# STEP 2: Generate remaining readmissions
+# Generate remaining readmissions
 print("  → Generating remaining readmissions...")
-remaining_patients = [p for p in patients_with_multiple if p not in demo_readmit_patients]
+remaining_patients = [p for p in patient_with_multiple if p not in demo_readmit_patients]
 
-for _ in range(5_000 - len(demo_readmit_patients)):
-    if not remaining_patients:
-        break
-
-    patient_id = random.choice(remaining_patients)
-    patient_encs = encounters_pd[encounters_pd["patient_id"] == patient_id].to_dict("records")
+for patient_id in random.sample(remaining_patients, builtins.min(5_000 - len(readmissions_rows), len(remaining_patients))):
+    patient_encs = spark.table(f"{FULL_SCHEMA}.encounters").filter(
+        col("patient_id") == patient_id
+    ).orderBy("admission_date").collect()
 
     if len(patient_encs) >= 2:
-        original = random.choice(patient_encs[:-1])
-        later_encs = [e for e in patient_encs if e["admission_date"] > original["discharge_date"]]
+        original = patient_encs[0]
+        readmit = patient_encs[-1]
 
-        if later_encs:
-            readmit = random.choice(later_encs)
-            days_between = (readmit["admission_date"] - original["discharge_date"]).days
+        if readmit.admission_date > original.discharge_date:
+            days_between = (readmit.admission_date - original.discharge_date).days
 
-            readmissions_data.append({
-                "readmission_id": f"readmit-{str(readmission_counter).zfill(7)}",
-                "patient_id": patient_id,
-                "original_encounter_id": original["encounter_id"],
-                "readmit_encounter_id": readmit["encounter_id"],
-                "original_discharge_date": original["discharge_date"],
-                "readmit_admission_date": readmit["admission_date"],
-                "days_between": days_between,
-                "is_30_day": (days_between <= 30),
-                "is_demo_readmission": False
-            })
+            readmissions_rows.append(Row(
+                readmission_id=f"readmit-{str(readmission_counter).zfill(7)}",
+                patient_id=patient_id,
+                original_encounter_id=original.encounter_id,
+                readmit_encounter_id=readmit.encounter_id,
+                original_discharge_date=original.discharge_date,
+                readmit_admission_date=readmit.admission_date,
+                days_between=days_between,
+                is_30_day=(days_between <= 30),
+                is_demo_readmission=False
+            ))
             readmission_counter += 1
 
-readmissions_df = spark.createDataFrame(readmissions_data)
-readmissions_df.write.mode("overwrite").saveAsTable(f"{FULL_SCHEMA}.readmissions")
+readmissions_df = spark.createDataFrame(readmissions_rows)
+readmissions_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{FULL_SCHEMA}.readmissions")
 
-print(f"✅ Created {FULL_SCHEMA}.readmissions with {readmissions_df.count():,} records")
-print(f"   📊 30-day readmissions: {readmissions_df.filter(col('is_30_day') == True).count()}")
+print(f"✅ Created {FULL_SCHEMA}.readmissions with {len(readmissions_rows):,} records")
 
 # COMMAND ----------
 
@@ -379,22 +379,21 @@ print("Generating 10,000 risk scores...")
 all_patient_ids = [row.patient_id for row in spark.table(f"{FULL_SCHEMA}.patients").select("patient_id").collect()]
 
 # Get CHF/COPD patients
-chf_copd_encounters = spark.table(f"{FULL_SCHEMA}.diagnoses").filter(
-    (col("is_demo_chf") == True) | (col("is_demo_copd") == True)
-).select("encounter_id").distinct().collect()
-
 chf_copd_patient_ids = [
     row.patient_id
-    for row in spark.table(f"{FULL_SCHEMA}.encounters").filter(
-        col("encounter_id").isin([r.encounter_id for r in chf_copd_encounters])
-    ).select("patient_id").distinct().collect()
+    for row in spark.sql(f"""
+        SELECT DISTINCT e.patient_id
+        FROM {FULL_SCHEMA}.diagnoses d
+        JOIN {FULL_SCHEMA}.encounters e ON d.encounter_id = e.encounter_id
+        WHERE d.is_demo_chf = TRUE OR d.is_demo_copd = TRUE
+    """).collect()
 ]
 
-risk_scores_data = []
+risk_scores_rows = []
 
-# STEP 1: Plant 18 high-risk patients
+# Plant 18 high-risk patients
 print("  → Planting 18 high-risk patients (score > 0.7)...")
-high_risk_patients = random.sample(chf_copd_patient_ids, min(18, len(chf_copd_patient_ids)))
+high_risk_patients = random.sample(chf_copd_patient_ids, builtins.min(18, len(chf_copd_patient_ids)))
 
 for patient_id in high_risk_patients:
     risk_score = round(random.uniform(0.71, 0.95), 3)
@@ -403,21 +402,21 @@ for patient_id in high_risk_patients:
         "CHF/COPD diagnosis",
         "Multiple comorbidities",
         "Age > 65",
-        "Polypharmacy (>10 medications)",
+        "Polypharmacy",
         "Frequent ED utilization"
     ], k=random.randint(3, 5))
 
-    risk_scores_data.append({
-        "patient_id": patient_id,
-        "risk_score": risk_score,
-        "risk_category": "High",
-        "risk_factors": json.dumps(risk_factors),
-        "last_calculated": fake.date_time_between(start_date="-7d", end_date="now"),
-        "model_version": "v2.3.1",
-        "is_demo_high_risk": True
-    })
+    risk_scores_rows.append(Row(
+        patient_id=patient_id,
+        risk_score=risk_score,
+        risk_category="High",
+        risk_factors=json.dumps(risk_factors),
+        last_calculated=fake.date_time_between(start_date="-7d", end_date="now"),
+        model_version="v2.3.1",
+        is_demo_high_risk=True
+    ))
 
-# STEP 2: Add remaining risk scores
+# Add remaining risk scores
 print("  → Generating remaining risk scores...")
 used_patients = set(high_risk_patients)
 remaining_patients = [p for p in all_patient_ids if p not in used_patients]
@@ -426,21 +425,20 @@ for patient_id in remaining_patients[:10_000 - len(high_risk_patients)]:
     risk_score = round(random.triangular(0.1, 0.8, 0.3), 3)
     category = "Low" if risk_score < 0.3 else "Moderate" if risk_score < 0.7 else "High"
 
-    risk_scores_data.append({
-        "patient_id": patient_id,
-        "risk_score": risk_score,
-        "risk_category": category,
-        "risk_factors": json.dumps([]),
-        "last_calculated": fake.date_time_between(start_date="-30d", end_date="now"),
-        "model_version": "v2.3.1",
-        "is_demo_high_risk": False
-    })
+    risk_scores_rows.append(Row(
+        patient_id=patient_id,
+        risk_score=risk_score,
+        risk_category=category,
+        risk_factors=json.dumps([]),
+        last_calculated=fake.date_time_between(start_date="-30d", end_date="now"),
+        model_version="v2.3.1",
+        is_demo_high_risk=False
+    ))
 
-risk_scores_df = spark.createDataFrame(risk_scores_data)
-risk_scores_df.write.mode("overwrite").saveAsTable(f"{FULL_SCHEMA}.risk_scores")
+risk_scores_df = spark.createDataFrame(risk_scores_rows)
+risk_scores_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{FULL_SCHEMA}.risk_scores")
 
-print(f"✅ Created {FULL_SCHEMA}.risk_scores with {risk_scores_df.count():,} records")
-print(f"   📊 High-risk patients (>0.7): {risk_scores_df.filter(col('risk_score') > 0.7).count()}")
+print(f"✅ Created {FULL_SCHEMA}.risk_scores with {len(risk_scores_rows):,} records")
 
 # COMMAND ----------
 
@@ -453,78 +451,71 @@ print("Generating 8,000 SDOH records...")
 
 high_risk_patient_ids = [
     row.patient_id
-    for row in spark.table(f"{FULL_SCHEMA}.risk_scores").filter(col("is_demo_high_risk") == True).select("patient_id").collect()
+    for row in spark.table(f"{FULL_SCHEMA}.risk_scores").filter(col("is_demo_high_risk") == True).collect()
 ]
 
-sdoh_data = []
+sdoh_rows = []
 
-# STEP 1: Plant 5 with transportation barriers
+# Plant 5 with transportation barriers
 print("  → Planting 5 patients with transportation barriers...")
-transport_patients = random.sample(high_risk_patient_ids, min(5, len(high_risk_patient_ids)))
+transport_patients = random.sample(high_risk_patient_ids, builtins.min(5, len(high_risk_patient_ids)))
 
 for patient_id in transport_patients:
-    sdoh_data.append({
-        "patient_id": patient_id,
-        "housing_instability": random.choice([True, False]),
-        "transportation_barrier": True,
-        "food_insecurity": random.choice([True, False]),
-        "social_isolation": random.choice([True, False]),
-        "financial_strain": random.choice([True, False]),
-        "utility_assistance_needed": random.choice([True, False]),
-        "last_assessed": fake.date_time_between(start_date="-30d", end_date="now")
-    })
+    sdoh_rows.append(Row(
+        patient_id=patient_id,
+        housing_instability=random.choice([True, False]),
+        transportation_barrier=True,
+        food_insecurity=random.choice([True, False]),
+        social_isolation=random.choice([True, False]),
+        financial_strain=random.choice([True, False]),
+        utility_assistance_needed=random.choice([True, False]),
+        last_assessed=fake.date_time_between(start_date="-30d", end_date="now")
+    ))
 
-# STEP 2: Plant 3 with housing instability
+# Plant 3 with housing instability
 print("  → Planting 3 patients with housing instability...")
 remaining_high_risk = [p for p in high_risk_patient_ids if p not in transport_patients]
-housing_patients = random.sample(remaining_high_risk, min(3, len(remaining_high_risk)))
+housing_patients = random.sample(remaining_high_risk, builtins.min(3, len(remaining_high_risk)))
 
 for patient_id in housing_patients:
-    sdoh_data.append({
-        "patient_id": patient_id,
-        "housing_instability": True,
-        "transportation_barrier": random.choice([True, False]),
-        "food_insecurity": random.choice([True, False]),
-        "social_isolation": random.choice([True, False]),
-        "financial_strain": True,
-        "utility_assistance_needed": random.choice([True, False]),
-        "last_assessed": fake.date_time_between(start_date="-30d", end_date="now")
-    })
+    sdoh_rows.append(Row(
+        patient_id=patient_id,
+        housing_instability=True,
+        transportation_barrier=random.choice([True, False]),
+        food_insecurity=random.choice([True, False]),
+        social_isolation=random.choice([True, False]),
+        financial_strain=True,
+        utility_assistance_needed=random.choice([True, False]),
+        last_assessed=fake.date_time_between(start_date="-30d", end_date="now")
+    ))
 
-# STEP 3: Generate remaining SDOH records
+# Generate remaining SDOH records
 print("  → Generating remaining SDOH records...")
 used_patients = set(transport_patients + housing_patients)
 remaining = [p for p in all_patient_ids if p not in used_patients]
 
-for patient_id in remaining[:8_000 - len(sdoh_data)]:
+for patient_id in remaining[:8_000 - len(sdoh_rows)]:
     num_barriers = random.choices([0, 1, 2, 3], weights=[40, 30, 20, 10])[0]
+    all_barriers = ["housing_instability", "transportation_barrier", "food_insecurity",
+                    "social_isolation", "financial_strain", "utility_assistance_needed"]
 
-    barriers = {
-        "housing_instability": False,
-        "transportation_barrier": False,
-        "food_insecurity": False,
-        "social_isolation": False,
-        "financial_strain": False,
-        "utility_assistance_needed": False
-    }
+    active_barriers = set(random.sample(all_barriers, k=num_barriers)) if num_barriers > 0 else set()
 
-    if num_barriers > 0:
-        barrier_keys = random.sample(list(barriers.keys()), k=num_barriers)
-        for key in barrier_keys:
-            barriers[key] = True
+    sdoh_rows.append(Row(
+        patient_id=patient_id,
+        housing_instability=("housing_instability" in active_barriers),
+        transportation_barrier=("transportation_barrier" in active_barriers),
+        food_insecurity=("food_insecurity" in active_barriers),
+        social_isolation=("social_isolation" in active_barriers),
+        financial_strain=("financial_strain" in active_barriers),
+        utility_assistance_needed=("utility_assistance_needed" in active_barriers),
+        last_assessed=fake.date_time_between(start_date="-90d", end_date="now")
+    ))
 
-    sdoh_data.append({
-        "patient_id": patient_id,
-        **barriers,
-        "last_assessed": fake.date_time_between(start_date="-90d", end_date="now")
-    })
+sdoh_df = spark.createDataFrame(sdoh_rows)
+sdoh_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{FULL_SCHEMA}.sdoh")
 
-sdoh_df = spark.createDataFrame(sdoh_data)
-sdoh_df.write.mode("overwrite").saveAsTable(f"{FULL_SCHEMA}.sdoh")
-
-print(f"✅ Created {FULL_SCHEMA}.sdoh with {sdoh_df.count():,} records")
-print(f"   📊 Transportation barriers: {sdoh_df.filter(col('transportation_barrier') == True).count()}")
-print(f"   📊 Housing instability: {sdoh_df.filter(col('housing_instability') == True).count()}")
+print(f"✅ Created {FULL_SCHEMA}.sdoh with {len(sdoh_rows):,} records")
 
 # COMMAND ----------
 
@@ -535,40 +526,33 @@ print(f"   📊 Housing instability: {sdoh_df.filter(col('housing_instability') 
 
 print("Generating 15 care coordinators...")
 
-coordinators_data = [
-    {
-        "coordinator_id": "coord-001",
-        "name": "Sarah Johnson, RN",
-        "title": "Senior Care Coordinator",
-        "current_caseload": 18,
-        "max_caseload": 30,
-        "available_capacity": 12,
-        "specialties": json.dumps(["CHF", "COPD", "Cardiology"]),
-        "years_experience": 12,
-        "active": True,
-        "is_demo_coordinator": True
-    },
-    {
-        "coordinator_id": "coord-002",
-        "name": "Michael Chen, MSW",
-        "title": "Care Coordinator",
-        "current_caseload": 22,
-        "max_caseload": 30,
-        "available_capacity": 8,
-        "specialties": json.dumps(["COPD", "Pulmonary", "Geriatrics"]),
-        "years_experience": 8,
-        "active": True,
-        "is_demo_coordinator": True
-    },
+coordinators_rows = [
+    Row(coordinator_id="coord-001", name="Sarah Johnson, RN", title="Senior Care Coordinator",
+        current_caseload=18, max_caseload=30, available_capacity=12,
+        specialties=json.dumps(["CHF", "COPD", "Cardiology"]), years_experience=12,
+        active=True, is_demo_coordinator=True),
+    Row(coordinator_id="coord-002", name="Michael Chen, MSW", title="Care Coordinator",
+        current_caseload=22, max_caseload=30, available_capacity=8,
+        specialties=json.dumps(["COPD", "Pulmonary", "Geriatrics"]), years_experience=8,
+        active=True, is_demo_coordinator=True),
+    Row(coordinator_id="coord-003", name="Jessica Martinez, RN", title="Care Coordinator",
+        current_caseload=28, max_caseload=30, available_capacity=2,
+        specialties=json.dumps(["Diabetes", "Endocrinology"]), years_experience=6,
+        active=True, is_demo_coordinator=False),
+    Row(coordinator_id="coord-004", name="David Thompson, BSN", title="Care Coordinator",
+        current_caseload=25, max_caseload=30, available_capacity=5,
+        specialties=json.dumps(["Oncology", "Palliative Care"]), years_experience=10,
+        active=True, is_demo_coordinator=False),
+    Row(coordinator_id="coord-005", name="Emily Rodriguez, RN", title="Senior Care Coordinator",
+        current_caseload=20, max_caseload=30, available_capacity=10,
+        specialties=json.dumps(["Pediatrics"]), years_experience=15,
+        active=True, is_demo_coordinator=False),
 ]
 
-# Add 13 more coordinators
-additional = [
-    ("coord-003", "Jessica Martinez, RN", 28, ["Diabetes", "Endocrinology"], 6),
-    ("coord-004", "David Thompson, BSN", 25, ["Oncology", "Palliative Care"], 10),
-    ("coord-005", "Emily Rodriguez, RN", 20, ["Pediatrics"], 15),
+# Add 10 more coordinators
+more_coords = [
     ("coord-006", "James Wilson, MSW", 30, ["Behavioral Health"], 7),
-    ("coord-007", "Maria Garcia, RN", 24, ["Nephrology", "Dialysis"], 9),
+    ("coord-007", "Maria Garcia, RN", 24, ["Nephrology"], 9),
     ("coord-008", "Robert Lee, BSN", 26, ["Orthopedics"], 5),
     ("coord-009", "Linda Anderson, MSW", 15, ["Geriatrics"], 18),
     ("coord-010", "Christopher Brown, RN", 30, ["Trauma"], 11),
@@ -579,25 +563,18 @@ additional = [
     ("coord-015", "Nancy Thomas, MSW", 19, ["Pain Management"], 9),
 ]
 
-for coord_id, name, caseload, specialties, experience in additional:
-    coordinators_data.append({
-        "coordinator_id": coord_id,
-        "name": name,
-        "title": "Care Coordinator",
-        "current_caseload": caseload,
-        "max_caseload": 30,
-        "available_capacity": 30 - caseload,
-        "specialties": json.dumps(specialties),
-        "years_experience": experience,
-        "active": True,
-        "is_demo_coordinator": False
-    })
+for coord_id, name, caseload, specialties, experience in more_coords:
+    coordinators_rows.append(Row(
+        coordinator_id=coord_id, name=name, title="Care Coordinator",
+        current_caseload=caseload, max_caseload=30, available_capacity=30-caseload,
+        specialties=json.dumps(specialties), years_experience=experience,
+        active=True, is_demo_coordinator=False
+    ))
 
-coordinators_df = spark.createDataFrame(coordinators_data)
-coordinators_df.write.mode("overwrite").saveAsTable(f"{FULL_SCHEMA}.care_coordinators")
+coordinators_df = spark.createDataFrame(coordinators_rows)
+coordinators_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{FULL_SCHEMA}.care_coordinators")
 
-print(f"✅ Created {FULL_SCHEMA}.care_coordinators with {coordinators_df.count():,} records")
-print(f"   📊 CHF/COPD specialists: {coordinators_df.filter(col('is_demo_coordinator') == True).count()}")
+print(f"✅ Created {FULL_SCHEMA}.care_coordinators with {len(coordinators_rows):,} records")
 
 # COMMAND ----------
 
