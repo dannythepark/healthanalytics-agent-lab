@@ -1,0 +1,536 @@
+project:
+  name: "HealthAnalytics Clinical Agent Lab"
+  customer: "Regional Health System"
+  description: "Databricks AI Agents workshop for clinical analytics use cases"
+  compliance: "HIPAA - all data stays within Databricks"
+
+story:
+  team: "HealthAnalytics AI - Internal Data Science Team"
+  tagline: "From 4-6 hours to 60 seconds: Clinical insights at the speed of care"
+  setting: "Regional health system serving 500,000+ patients across 12 hospitals and 80+ clinics"
+  analyst_persona: "Maria - Senior Clinical Analyst"
+  use_case: "High-risk readmission identification and care coordination"
+  scenario: "Monday morning executive request for readmission risk list"
+  problem: "Manual analysis across fragmented systems takes 4-6 hours every Monday"
+  solution: "Clinical Analytics Agent orchestrates multiple data sources in under 60 seconds"
+  key_metric:
+    before: "4-6 hours manual SQL + Excel analysis"
+    after: "60 seconds automated agent response"
+  business_impact:
+    - "Executive team gets actionable insights same-day instead of next-day"
+    - "Care coordinators can prioritize high-risk patients immediately"
+    - "Analysts freed up for deeper clinical research"
+    - "Consistent methodology across all readmission analyses"
+
+architecture:
+  data_layer:
+    - name: "patients"
+      records: 10000
+      key_fields: ["patient_id", "mrn", "age", "gender", "zip_code", "race_ethnicity"]
+      note: "Synthetic patient demographics (HIPAA-compliant)"
+      purpose: "Core patient registry for the health system"
+
+    - name: "encounters"
+      records: 50000
+      key_fields: ["encounter_id", "patient_id", "admission_date", "discharge_date", "encounter_type", "facility", "length_of_stay"]
+      crisis_data: "127 recent discharges in last 7 days"
+      purpose: "Inpatient admissions and emergency visits"
+      note: "Includes discharge dates critical for readmission tracking"
+
+    - name: "diagnoses"
+      records: 150000
+      key_fields: ["diagnosis_id", "encounter_id", "icd10_code", "description", "is_primary"]
+      crisis_data: "23 CHF patients (ICD-10: I50.*), 19 COPD patients (ICD-10: J44.*)"
+      purpose: "Clinical diagnoses using ICD-10 coding"
+      note: "Multiple diagnoses per encounter, primary diagnosis flagged"
+
+    - name: "readmissions"
+      records: 5000
+      key_fields: ["readmission_id", "original_encounter_id", "readmit_encounter_id", "days_between", "is_30_day"]
+      crisis_data: "32 patients with prior 30-day readmissions"
+      purpose: "Track all-cause readmissions with 30-day flagging"
+      note: "30-day readmission is a CMS quality metric"
+
+    - name: "risk_scores"
+      records: 10000
+      key_fields: ["patient_id", "risk_score", "last_calculated", "risk_factors"]
+      crisis_data: "18 patients with risk_score > 0.7 threshold"
+      purpose: "Predictive readmission risk scores (0.0-1.0)"
+      note: "Risk factors stored as JSON array"
+
+    - name: "sdoh"
+      records: 8000
+      key_fields: ["patient_id", "housing_instability", "transportation_barrier", "food_insecurity", "social_isolation"]
+      crisis_data: "5 patients with transportation barriers, 3 with housing instability"
+      purpose: "Social Determinants of Health"
+      note: "Critical for understanding non-clinical readmission drivers"
+
+    - name: "care_coordinators"
+      records: 15
+      key_fields: ["coordinator_id", "name", "current_caseload", "max_caseload", "specialties"]
+      crisis_data: "2 coordinators specialize in CHF/COPD with available capacity"
+      purpose: "Care management team capacity and specialties"
+      note: "Used for intelligent assignment of high-risk patients"
+
+  tools:
+    sql_functions:
+      - name: "get_recent_discharges"
+        signature: "get_recent_discharges(days_back INT)"
+        returns: "TABLE(encounter_id, patient_id, mrn, discharge_date, facility, encounter_type)"
+        purpose: "Find patients discharged in the last N days"
+        clinical_logic: "Filters encounters where discharge_date >= CURRENT_DATE - days_back"
+        used_in_demo: true
+
+      - name: "get_diagnoses_by_condition"
+        signature: "get_diagnoses_by_condition(condition_name STRING)"
+        returns: "TABLE(encounter_id, patient_id, icd10_code, description, is_primary)"
+        purpose: "Filter encounters by diagnosis (CHF, COPD, Diabetes, etc.)"
+        clinical_logic: "Supports condition names (CHF, COPD) mapped to ICD-10 code patterns"
+        used_in_demo: true
+
+      - name: "get_patient_readmission_history"
+        signature: "get_patient_readmission_history(patient_id STRING)"
+        returns: "TABLE(readmission_id, original_date, readmit_date, days_between, is_30_day)"
+        purpose: "Check if patient has prior readmissions"
+        clinical_logic: "Returns all readmissions, flags 30-day readmissions per CMS definition"
+        used_in_demo: true
+
+      - name: "get_risk_score"
+        signature: "get_risk_score(patient_id STRING)"
+        returns: "STRUCT(risk_score DOUBLE, last_calculated TIMESTAMP, risk_factors ARRAY<STRING>)"
+        purpose: "Get patient's calculated readmission risk"
+        clinical_logic: "Returns most recent risk score and contributing factors"
+        used_in_demo: true
+
+      - name: "get_sdoh_barriers"
+        signature: "get_sdoh_barriers(patient_id STRING)"
+        returns: "STRUCT(housing_instability BOOLEAN, transportation_barrier BOOLEAN, food_insecurity BOOLEAN, social_isolation BOOLEAN)"
+        purpose: "Identify social determinants affecting care"
+        clinical_logic: "Social barriers correlate with readmission risk"
+        used_in_demo: true
+
+      - name: "get_available_care_coordinators"
+        signature: "get_available_care_coordinators(specialty STRING)"
+        returns: "TABLE(coordinator_id, name, current_caseload, max_caseload, available_capacity, specialties)"
+        purpose: "Find care coordinators who can take new cases"
+        clinical_logic: "Filters where current_caseload < max_caseload and specialty matches"
+        used_in_demo: true
+
+    python_functions:
+      - name: "calculate_priority_score"
+        signature: "calculate_priority_score(patient_id: str) -> dict"
+        returns: "{'priority_score': float, 'risk_factors': list, 'recommendations': str}"
+        purpose: "Combine clinical + social factors into priority score"
+        clinical_logic: |
+          Weighted scoring:
+          - Base risk score (0-1): 60% weight
+          - Prior 30-day readmission: +0.2
+          - Transportation barrier: +0.1
+          - Housing instability: +0.15
+          - CHF/COPD diagnosis: +0.1
+        used_in_demo: true
+
+      - name: "assign_care_coordinator"
+        signature: "assign_care_coordinator(patient_list: list, specialty: str) -> dict"
+        returns: "{'assignments': [{'patient_id': str, 'coordinator_id': str, 'coordinator_name': str}], 'unassigned': []}"
+        purpose: "Balance caseloads and match specialties"
+        clinical_logic: "Round-robin assignment respecting capacity and specialty matching"
+        used_in_demo: true
+
+      - name: "generate_outreach_report"
+        signature: "generate_outreach_report(patient_list: list) -> str"
+        returns: "Formatted markdown report with patient details and recommendations"
+        purpose: "Create actionable report for care management"
+        clinical_logic: "Groups by priority tier, includes clinical context and next steps"
+        used_in_demo: true
+
+  agent:
+    model: "databricks-meta-llama-3-1-70b-instruct"
+    persona: "HealthAnalytics AI - Clinical Intelligence Assistant"
+    role: "Expert clinical data analyst with deep healthcare domain knowledge"
+    capabilities:
+      - "Multi-source clinical data integration (EHR, claims, ADT feeds)"
+      - "Risk stratification using validated clinical models"
+      - "Care coordination optimization with capacity management"
+      - "HIPAA-compliant analysis (all data stays in Databricks)"
+      - "Clinical terminology and coding (ICD-10, CPT, HCPCS)"
+    tone: "Professional, clinical, empathetic, privacy-conscious"
+    constraints:
+      - "Never make clinical diagnoses or treatment recommendations"
+      - "Always use synthetic data for demos"
+      - "All data processing stays within Databricks"
+      - "Respect care coordinator capacity limits"
+
+demo_flow:
+  executive_question: |
+    "Show me high-risk patients discharged in the last 7 days who need outreach
+    this week. Focus on CHF and COPD patients with prior readmissions."
+
+  context: "Monday morning, VP of Care Management needs to prioritize outreach for the week"
+
+  expected_tool_calls:
+    - step: 1
+      tool: "get_recent_discharges"
+      args: {days_back: 7}
+      finds: "127 recent discharges"
+      rationale: "Identify the cohort of recently discharged patients"
+
+    - step: 2
+      tool: "get_diagnoses_by_condition"
+      args: {condition_name: "CHF"}
+      finds: "23 CHF patients"
+      rationale: "Filter for Congestive Heart Failure patients"
+
+    - step: 3
+      tool: "get_diagnoses_by_condition"
+      args: {condition_name: "COPD"}
+      finds: "19 COPD patients"
+      rationale: "Filter for Chronic Obstructive Pulmonary Disease patients"
+
+    - step: 4
+      tool: "get_patient_readmission_history"
+      args: {patient_id: "each CHF/COPD patient"}
+      finds: "32 patients with prior 30-day readmissions"
+      rationale: "Identify patients with historical readmission risk"
+
+    - step: 5
+      tool: "get_risk_score"
+      args: {patient_id: "each patient"}
+      finds: "Risk scores calculated, 18 patients > 0.7 threshold"
+      rationale: "Get predictive risk scores for prioritization"
+
+    - step: 6
+      tool: "get_sdoh_barriers"
+      args: {patient_id: "high-risk patients"}
+      finds: "5 with transportation barriers, 3 with housing instability"
+      rationale: "Understand social barriers that increase risk"
+
+    - step: 7
+      tool: "calculate_priority_score"
+      args: {patient_id: "each high-risk patient"}
+      finds: "Composite priority scores combining all factors"
+      rationale: "Create unified priority ranking"
+
+    - step: 8
+      tool: "get_available_care_coordinators"
+      args: {specialty: "CHF/COPD"}
+      finds: "2 coordinators with capacity"
+      rationale: "Find coordinators who can take new cases"
+
+    - step: 9
+      tool: "assign_care_coordinator"
+      args: {patient_list: "top 18 by priority", specialty: "CHF/COPD"}
+      finds: "Patient-to-coordinator assignments"
+      rationale: "Balance caseloads and match expertise"
+
+    - step: 10
+      tool: "generate_outreach_report"
+      args: {patient_list: "assigned patients"}
+      finds: "Prioritized outreach list with recommendations"
+      rationale: "Create actionable report for care team"
+
+  expected_response_contains:
+    - "18 high-risk patients identified for outreach"
+    - "CHF and COPD focus conditions"
+    - "Prior readmission history flagged"
+    - "Social barriers identified (transportation, housing)"
+    - "Care coordinator assignments balanced by capacity"
+    - "Recommended outreach approach and timing"
+    - "Priority tiers (Tier 1: Contact within 24h, Tier 2: Within 48h, etc.)"
+
+  time_savings: "From Maria's 4-6 hour manual process to 60 seconds"
+
+evaluation:
+  dataset_size: 20
+  question_types:
+    simple:
+      count: 6
+      examples:
+        - "How many patients were discharged in the last 7 days?"
+        - "What is the risk score for patient MRN 123456?"
+        - "List all care coordinators with availability"
+        - "How many CHF patients are in the system?"
+        - "What social barriers does patient MRN 789012 have?"
+        - "How many 30-day readmissions occurred last month?"
+      expected_tools: ["1-2 SQL functions"]
+      complexity: "Single data source, factual retrieval"
+
+    medium:
+      count: 8
+      examples:
+        - "Which CHF patients were discharged this week?"
+        - "How many patients have both diabetes and prior readmissions?"
+        - "What are the social barriers for high-risk patients?"
+        - "Which care coordinators have capacity for new CHF patients?"
+        - "List patients with risk scores above 0.8"
+        - "What are the most common diagnoses for readmitted patients?"
+        - "How many COPD patients have transportation barriers?"
+        - "Which facilities have the highest readmission rates?"
+      expected_tools: ["2-4 SQL functions, 1 Python function"]
+      complexity: "Multiple data sources, filtering and joining"
+
+    complex:
+      count: 6
+      examples:
+        - "Show me high-risk patients discharged in the last 7 days who need outreach this week"
+        - "Which patients should we prioritize for care coordination based on risk and capacity?"
+        - "Generate a Monday morning readmission prevention report for the VP of Care Management"
+        - "Identify CHF patients with multiple risk factors and assign them to appropriate coordinators"
+        - "What interventions should we prioritize for patients with both clinical and social risk factors?"
+        - "Create an outreach plan for COPD patients considering coordinator capacity and patient priority"
+      expected_tools: ["5+ SQL functions, 2-3 Python functions, multi-step reasoning"]
+      complexity: "Multi-source integration, clinical logic, actionable recommendations"
+
+  judges:
+    - name: "clinical_accuracy"
+      type: "custom"
+      criteria: |
+        Did the agent correctly identify high-risk patients using appropriate clinical criteria?
+        - Correct application of risk thresholds (>0.7)
+        - Proper identification of CHF/COPD patients using ICD-10
+        - Accurate readmission history checking (30-day window)
+      scoring: "1-5 scale"
+
+    - name: "completeness"
+      type: "custom"
+      criteria: |
+        Did the agent check all relevant data sources?
+        - Encounters (discharge dates)
+        - Diagnoses (CHF, COPD)
+        - Risk scores
+        - Readmission history
+        - SDOH barriers
+        - Care coordinator capacity
+      scoring: "1-5 scale"
+
+    - name: "actionability"
+      type: "custom"
+      criteria: |
+        Did the agent provide concrete next steps?
+        - Specific patient list with MRNs
+        - Care coordinator assignments
+        - Priority tiers with timeframes
+        - Recommended interventions
+      scoring: "1-5 scale"
+
+    - name: "hipaa_compliance"
+      type: "custom"
+      criteria: |
+        Did the agent maintain HIPAA compliance?
+        - No external API calls
+        - All data stayed within Databricks
+        - Appropriate handling of synthetic PHI
+        - No unauthorized data sharing
+      scoring: "Pass/Fail"
+
+    - name: "response_quality"
+      type: "built-in"
+      criteria: "Overall response quality and relevance"
+      note: "Uses MLflow's built-in judging"
+
+files:
+  - path: "CLAUDE.yaml"
+    purpose: "Project context for Claude Code"
+    size: "Comprehensive reference"
+
+  - path: "README.md"
+    purpose: "Lab instructions and HealthAnalytics story"
+    sections: ["Story", "Architecture", "Setup", "Lab Exercises", "Demo Script"]
+
+  - path: "00_setup/00_config.py"
+    purpose: "User configuration - CATALOG name"
+    user_input: "CATALOG = 'your_catalog_name'"
+
+  - path: "00_setup/01_dlt_synthetic_data.py"
+    purpose: "DLT pipeline for synthetic patient data"
+    tables: 7
+    total_records: 233015
+    hipaa_compliant: true
+
+  - path: "01_create_tools/01_create_tools.py"
+    purpose: "SQL and Python function definitions"
+    sql_functions: 6
+    python_functions: 3
+    unity_catalog: true
+
+  - path: "02_agent_eval/agent.py"
+    purpose: "Clinical agent definition - prompts and tool wiring"
+    prompts: ["basic", "improved"]
+    tools: 9
+
+  - path: "02_agent_eval/eval_dataset.py"
+    purpose: "Evaluation Q&A pairs for clinical scenarios"
+    qa_pairs: 20
+    types: ["simple", "medium", "complex"]
+
+  - path: "02_agent_eval/driver.py"
+    purpose: "Evaluation execution notebook"
+    features: ["Run evaluation", "Compare runs", "Custom judges", "MLflow tracking"]
+
+  - path: "03_deployment/deploy_agent.py"
+    purpose: "Model registration and serving endpoint"
+    steps: ["Register to UC", "Deploy to endpoint", "Test inference"]
+
+  - path: "assets/architecture_diagram.html"
+    purpose: "Healthcare analytics architecture diagram"
+    style: "Databricks brand, interactive, professional"
+
+conventions:
+  data_privacy: "All synthetic data - no real PHI, HIPAA-compliant patterns"
+  naming:
+    tables: "snake_case"
+    functions: "snake_case"
+    patient_ids: "Synthetic MRNs (Medical Record Numbers)"
+    icd10_codes: "Standard ICD-10 format (e.g., I50.9 for CHF)"
+  clinical_terminology:
+    - "CHF = Congestive Heart Failure (ICD-10: I50.*)"
+    - "COPD = Chronic Obstructive Pulmonary Disease (ICD-10: J44.*)"
+    - "MRN = Medical Record Number"
+    - "ADT = Admit/Discharge/Transfer"
+    - "SDOH = Social Determinants of Health"
+    - "CMS = Centers for Medicare & Medicaid Services"
+    - "30-day readmission = Readmission within 30 days of discharge"
+  code_style:
+    - "Use Databricks # MAGIC %md for markdown cells"
+    - "Include clear section headers with clinical context"
+    - "Add comments explaining clinical logic"
+    - "Use type hints in Python functions"
+
+dependencies:
+  python:
+    - name: "faker"
+      purpose: "Generate synthetic patient data"
+    - name: "mlflow"
+      purpose: "Agent evaluation and tracking"
+    - name: "databricks-agents"
+      purpose: "Agent SDK"
+    - name: "pydantic"
+      purpose: "Data validation"
+  databricks:
+    - name: "Unity Catalog"
+      purpose: "Data governance and function registry"
+    - name: "Delta Live Tables"
+      purpose: "Data pipeline orchestration"
+    - name: "Model Serving"
+      purpose: "Agent deployment"
+    - name: "AI Playground"
+      purpose: "Interactive agent testing"
+    - name: "MLflow"
+      purpose: "Experiment tracking and evaluation"
+
+common_issues:
+  - issue: "Worried about PHI/HIPAA compliance"
+    solution: "All data is synthetic and stays within Databricks. No external API calls. Clearly labeled as demo data."
+    talking_point: "This architecture keeps all data within your Databricks workspace, ensuring HIPAA compliance."
+
+  - issue: "Clinical logic seems too simple"
+    solution: "This is a demo - production would include validated risk models (e.g., HOSPITAL score, LACE index) and clinical rules from your medical staff."
+    talking_point: "The framework is production-ready; you'd integrate your organization's validated risk models."
+
+  - issue: "Want to use their own risk scoring algorithm"
+    solution: "Python tools are modular - swap in custom scoring logic in calculate_priority_score()."
+    talking_point: "Show them the calculate_priority_score() function and how to replace with their model."
+
+  - issue: "Concerned about cost with pay-per-token models"
+    solution: "Databricks Foundation Models offer predictable pricing. For high-volume use, consider fine-tuned smaller models."
+    talking_point: "This customer uses ~$300-400/month now. Agent orchestration can reduce total tokens by focusing LLM on synthesis, not data retrieval."
+
+  - issue: "How do we handle real-time data?"
+    solution: "DLT supports streaming ingestion. Risk scores can be incrementally updated. Agent queries current state."
+    talking_point: "Your ADT feeds can stream into Delta tables, and the agent always queries the latest data."
+
+quick_reference:
+  demo_question: "Show me high-risk patients discharged in the last 7 days who need outreach this week. Focus on CHF and COPD patients with prior readmissions."
+
+  key_tables: ["encounters", "diagnoses", "risk_scores", "readmissions", "sdoh", "care_coordinators"]
+
+  focus_conditions:
+    - "CHF (Congestive Heart Failure) - ICD-10: I50.*"
+    - "COPD (Chronic Obstructive Pulmonary Disease) - ICD-10: J44.*"
+
+  risk_threshold: 0.7
+  lookback_days: 7
+  key_metric: "30-day all-cause readmission rate"
+
+  planted_data:
+    recent_discharges: 127
+    chf_patients: 23
+    copd_patients: 19
+    prior_readmissions: 32
+    high_risk_count: 18
+    available_coordinators: 2
+
+  time_comparison:
+    before: "4-6 hours (Maria's manual Monday morning analysis)"
+    after: "60 seconds (automated agent response)"
+
+  talking_points:
+    - "This isn't just automation - it's augmentation. Maria now focuses on complex clinical questions."
+    - "Consistent methodology means every Monday starts with the same high-quality analysis."
+    - "Care coordinators can act immediately instead of waiting for afternoon reports."
+    - "The agent learns your organization's clinical logic and coding patterns."
+
+workshop_flow:
+  duration: "2-3 hours"
+
+  modules:
+    - module: "Introduction (15 min)"
+      content: "HealthAnalytics story, Maria's Monday morning, demo the agent"
+
+    - module: "Setup (20 min)"
+      content: "Configure catalog, run DLT pipeline, verify data"
+
+    - module: "Create Tools (30 min)"
+      content: "Build SQL functions, create Python tools, test in AI Playground"
+
+    - module: "Build Agent (30 min)"
+      content: "Define prompts, wire tools, test with simple queries"
+
+    - module: "Evaluation (30 min)"
+      content: "Run eval dataset, review judges, iterate on prompts"
+
+    - module: "Deployment (20 min)"
+      content: "Register agent, deploy to endpoint, test inference"
+
+    - module: "Discussion (15 min)"
+      content: "Production considerations, other use cases, Q&A"
+
+  key_moments:
+    - "Live demo of the full readmission query (wow moment)"
+    - "Show the evaluation comparison between basic and improved prompts"
+    - "Query the deployed endpoint like a real application would"
+
+personas:
+  maria:
+    role: "Senior Clinical Analyst"
+    background: "10 years in healthcare analytics, RN background"
+    pain_point: "Spends hours on repetitive Monday morning reports"
+    quote: "I know exactly what they're going to ask, but I still have to rebuild the analysis every week."
+
+  vp_care_management:
+    role: "VP of Care Management"
+    background: "Oversees care coordination for the health system"
+    pain_point: "Needs actionable insights early Monday to plan the week"
+    quote: "By the time I get the report, it's Monday afternoon and coordinators have already started their week."
+
+  care_coordinator:
+    role: "Care Coordinator (CHF/COPD specialist)"
+    background: "Manages caseload of 25-30 high-risk patients"
+    pain_point: "Manual patient prioritization, limited visibility into new discharges"
+    quote: "I find out about high-risk discharges too late. We need to reach out within 48 hours."
+
+success_metrics:
+  efficiency:
+    - "Analyst time saved: 4-6 hours/week → 15 minutes/week"
+    - "Report delivery: Monday afternoon → Monday 8am"
+    - "Query response time: Hours → Seconds"
+
+  clinical:
+    - "Time to first outreach: 48-72 hours → 24 hours"
+    - "Care coordinator utilization: Unbalanced → Optimized"
+    - "Readmission prevention: Earlier intervention"
+
+  enablement:
+    - "Analysts can build custom agents for new use cases"
+    - "Reusable tool library across the organization"
+    - "Self-service analytics for clinical teams"
