@@ -309,12 +309,17 @@ def calculate_priority_score_udf(patient_id: str) -> dict:
     """
     from pyspark.sql import SparkSession
     spark = SparkSession.builder.getOrCreate()
+    
+    # Use global FULL_SCHEMA which is available in the notebook scope
+    # Note: In a UDF, we need to be careful with global variable access
+    # Passing it as a local variable for safer execution
+    schema = "danny_park.healthanalytics_ai" 
 
     try:
         # Get risk score
         risk_df = spark.sql(f"""
             SELECT risk_score, risk_factors
-            FROM {FULL_SCHEMA}.risk_scores
+            FROM {schema}.risk_scores
             WHERE patient_id = '{patient_id}'
         """)
 
@@ -332,7 +337,7 @@ def calculate_priority_score_udf(patient_id: str) -> dict:
         # Get readmission history
         readmit_df = spark.sql(f"""
             SELECT COUNT(*) as readmit_count
-            FROM {FULL_SCHEMA}.readmissions
+            FROM {schema}.readmissions
             WHERE patient_id = '{patient_id}' AND is_30_day = TRUE
         """)
         has_readmission = readmit_df.first().readmit_count > 0
@@ -340,7 +345,7 @@ def calculate_priority_score_udf(patient_id: str) -> dict:
         # Get SDOH barriers
         sdoh_df = spark.sql(f"""
             SELECT housing_instability, transportation_barrier
-            FROM {FULL_SCHEMA}.sdoh
+            FROM {schema}.sdoh
             WHERE patient_id = '{patient_id}'
         """)
 
@@ -354,8 +359,8 @@ def calculate_priority_score_udf(patient_id: str) -> dict:
         # Get diagnoses
         diag_df = spark.sql(f"""
             SELECT COUNT(*) as chf_copd_count
-            FROM {FULL_SCHEMA}.diagnoses d
-            JOIN {FULL_SCHEMA}.encounters e ON d.encounter_id = e.encounter_id
+            FROM {schema}.diagnoses d
+            JOIN {schema}.encounters e ON d.encounter_id = e.encounter_id
             WHERE e.patient_id = '{patient_id}'
               AND (d.icd10_code LIKE 'I50%' OR d.icd10_code LIKE 'J44%')
         """)
@@ -427,36 +432,37 @@ print(f"✅ Registered Python UDF: {FULL_SCHEMA}.calculate_priority_score")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE OR REPLACE FUNCTION ${FULL_SCHEMA}.suggest_coordinator_for_patient(
-# MAGIC   patient_id STRING,
-# MAGIC   specialty STRING
-# MAGIC )
-# MAGIC RETURNS TABLE(
-# MAGIC   patient_id STRING,
-# MAGIC   coordinator_id STRING,
-# MAGIC   coordinator_name STRING,
-# MAGIC   available_capacity INT,
-# MAGIC   match_quality STRING
-# MAGIC )
-# MAGIC COMMENT 'Suggests best care coordinator for a patient based on specialty and capacity'
-# MAGIC RETURN
-# MAGIC   SELECT
-# MAGIC     patient_id as patient_id,
-# MAGIC     coordinator_id,
-# MAGIC     name as coordinator_name,
-# MAGIC     available_capacity,
-# MAGIC     CASE
-# MAGIC       WHEN specialties LIKE CONCAT('%', specialty, '%') THEN 'Perfect Match'
-# MAGIC       WHEN specialties LIKE '%Geriatrics%' THEN 'General Match'
-# MAGIC       ELSE 'Available'
-# MAGIC     END as match_quality
-# MAGIC   FROM ${FULL_SCHEMA}.care_coordinators
-# MAGIC   WHERE active = TRUE AND available_capacity > 0
-# MAGIC   ORDER BY
-# MAGIC     CASE WHEN specialties LIKE CONCAT('%', specialty, '%') THEN 1 ELSE 2 END,
-# MAGIC     available_capacity DESC
-# MAGIC   LIMIT 1;
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {FULL_SCHEMA}.suggest_coordinator_for_patient(
+  patient_id STRING,
+  specialty STRING
+)
+RETURNS TABLE(
+  patient_id STRING,
+  coordinator_id STRING,
+  coordinator_name STRING,
+  available_capacity INT,
+  match_quality STRING
+)
+COMMENT 'Suggests best care coordinator for a patient based on specialty and capacity'
+RETURN
+  SELECT
+    patient_id as patient_id,
+    coordinator_id,
+    name as coordinator_name,
+    available_capacity,
+    CASE
+      WHEN specialties LIKE CONCAT('%', specialty, '%') THEN 'Perfect Match'
+      WHEN specialties LIKE '%Geriatrics%' THEN 'General Match'
+      ELSE 'Available'
+    END as match_quality
+  FROM {FULL_SCHEMA}.care_coordinators
+  WHERE active = TRUE AND available_capacity > 0
+  ORDER BY
+    CASE WHEN specialties LIKE CONCAT('%', specialty, '%') THEN 1 ELSE 2 END,
+    available_capacity DESC
+  LIMIT 1
+""")
 
 # COMMAND ----------
 
@@ -482,6 +488,8 @@ def generate_outreach_report(patient_ids: list) -> str:
 
     spark = SparkSession.builder.getOrCreate()
 
+    schema = "danny_park.healthanalytics_ai"
+
     # Build patient ID list for SQL IN clause
     patient_id_list = ", ".join([f"'{pid}'" for pid in patient_ids])
 
@@ -499,10 +507,10 @@ def generate_outreach_report(patient_ids: list) -> str:
       s.transportation_barrier,
       e.discharge_date,
       e.facility
-    FROM {FULL_SCHEMA}.patients p
-    LEFT JOIN {FULL_SCHEMA}.risk_scores rs ON p.patient_id = rs.patient_id
-    LEFT JOIN {FULL_SCHEMA}.sdoh s ON p.patient_id = s.patient_id
-    LEFT JOIN {FULL_SCHEMA}.encounters e ON p.patient_id = e.patient_id
+    FROM {schema}.patients p
+    LEFT JOIN {schema}.risk_scores rs ON p.patient_id = rs.patient_id
+    LEFT JOIN {schema}.sdoh s ON p.patient_id = s.patient_id
+    LEFT JOIN {schema}.encounters e ON p.patient_id = e.patient_id
     WHERE p.patient_id IN ({patient_id_list})
     ORDER BY rs.risk_score DESC
     """
