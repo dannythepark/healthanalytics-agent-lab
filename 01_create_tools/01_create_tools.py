@@ -44,35 +44,36 @@ print(f"Creating functions in: {FULL_SCHEMA}")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE OR REPLACE FUNCTION ${FULL_SCHEMA}.get_recent_discharges(days_back INT)
-# MAGIC RETURNS TABLE(
-# MAGIC   encounter_id STRING,
-# MAGIC   patient_id STRING,
-# MAGIC   mrn STRING,
-# MAGIC   patient_name STRING,
-# MAGIC   discharge_date TIMESTAMP,
-# MAGIC   facility STRING,
-# MAGIC   encounter_type STRING,
-# MAGIC   length_of_stay INT,
-# MAGIC   discharge_disposition STRING
-# MAGIC )
-# MAGIC COMMENT 'Returns patients discharged in the last N days with key demographics'
-# MAGIC RETURN
-# MAGIC   SELECT
-# MAGIC     e.encounter_id,
-# MAGIC     e.patient_id,
-# MAGIC     p.mrn,
-# MAGIC     CONCAT(p.first_name, ' ', p.last_name) as patient_name,
-# MAGIC     e.discharge_date,
-# MAGIC     e.facility,
-# MAGIC     e.encounter_type,
-# MAGIC     e.length_of_stay,
-# MAGIC     e.discharge_disposition
-# MAGIC   FROM ${FULL_SCHEMA}.encounters e
-# MAGIC   JOIN ${FULL_SCHEMA}.patients p ON e.patient_id = p.patient_id
-# MAGIC   WHERE e.discharge_date >= CURRENT_DATE() - days_back
-# MAGIC   ORDER BY e.discharge_date DESC;
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {FULL_SCHEMA}.get_recent_discharges(days_back INT)
+RETURNS TABLE(
+  encounter_id STRING,
+  patient_id STRING,
+  mrn STRING,
+  patient_name STRING,
+  discharge_date TIMESTAMP,
+  facility STRING,
+  encounter_type STRING,
+  length_of_stay INT,
+  discharge_disposition STRING
+)
+COMMENT 'Returns patients discharged in the last N days with key demographics'
+RETURN
+  SELECT
+    e.encounter_id,
+    e.patient_id,
+    p.mrn,
+    CONCAT(p.first_name, ' ', p.last_name) as patient_name,
+    e.discharge_date,
+    e.facility,
+    e.encounter_type,
+    e.length_of_stay,
+    e.discharge_disposition
+  FROM {FULL_SCHEMA}.encounters e
+  JOIN {FULL_SCHEMA}.patients p ON e.patient_id = p.patient_id
+  WHERE e.discharge_date >= CURRENT_DATE() - days_back
+  ORDER BY e.discharge_date DESC
+""")
 
 # COMMAND ----------
 
@@ -89,41 +90,42 @@ display(spark.sql(f"SELECT * FROM {FULL_SCHEMA}.get_recent_discharges(7) LIMIT 1
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE OR REPLACE FUNCTION ${FULL_SCHEMA}.get_diagnoses_by_condition(condition_name STRING)
-# MAGIC RETURNS TABLE(
-# MAGIC   encounter_id STRING,
-# MAGIC   patient_id STRING,
-# MAGIC   mrn STRING,
-# MAGIC   patient_name STRING,
-# MAGIC   icd10_code STRING,
-# MAGIC   description STRING,
-# MAGIC   is_primary BOOLEAN,
-# MAGIC   diagnosis_date TIMESTAMP
-# MAGIC )
-# MAGIC COMMENT 'Returns encounters with specific diagnosis (CHF, COPD, Diabetes, etc.)'
-# MAGIC RETURN
-# MAGIC   WITH condition_mapping AS (
-# MAGIC     SELECT 'CHF' as condition, 'I50%' as icd_pattern
-# MAGIC     UNION ALL SELECT 'COPD', 'J44%'
-# MAGIC     UNION ALL SELECT 'Diabetes', 'E11%'
-# MAGIC     UNION ALL SELECT 'Hypertension', 'I10%'
-# MAGIC     UNION ALL SELECT 'Sepsis', 'A41%'
-# MAGIC   )
-# MAGIC   SELECT DISTINCT
-# MAGIC     d.encounter_id,
-# MAGIC     e.patient_id,
-# MAGIC     p.mrn,
-# MAGIC     CONCAT(p.first_name, ' ', p.last_name) as patient_name,
-# MAGIC     d.icd10_code,
-# MAGIC     d.description,
-# MAGIC     d.is_primary,
-# MAGIC     d.diagnosis_date
-# MAGIC   FROM ${FULL_SCHEMA}.diagnoses d
-# MAGIC   JOIN ${FULL_SCHEMA}.encounters e ON d.encounter_id = e.encounter_id
-# MAGIC   JOIN ${FULL_SCHEMA}.patients p ON e.patient_id = p.patient_id
-# MAGIC   JOIN condition_mapping cm ON UPPER(cm.condition) = UPPER(condition_name)
-# MAGIC   WHERE d.icd10_code LIKE cm.icd_pattern;
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {FULL_SCHEMA}.get_diagnoses_by_condition(condition_name STRING)
+RETURNS TABLE(
+  encounter_id STRING,
+  patient_id STRING,
+  mrn STRING,
+  patient_name STRING,
+  icd10_code STRING,
+  description STRING,
+  is_primary BOOLEAN,
+  diagnosis_date TIMESTAMP
+)
+COMMENT 'Returns encounters with specific diagnosis (CHF, COPD, Diabetes, etc.)'
+RETURN
+  WITH condition_mapping AS (
+    SELECT 'CHF' as condition, 'I50%' as icd_pattern
+    UNION ALL SELECT 'COPD', 'J44%'
+    UNION ALL SELECT 'Diabetes', 'E11%'
+    UNION ALL SELECT 'Hypertension', 'I10%'
+    UNION ALL SELECT 'Sepsis', 'A41%'
+  )
+  SELECT DISTINCT
+    d.encounter_id,
+    e.patient_id,
+    p.mrn,
+    CONCAT(p.first_name, ' ', p.last_name) as patient_name,
+    d.icd10_code,
+    d.description,
+    d.is_primary,
+    d.diagnosis_date
+  FROM {FULL_SCHEMA}.diagnoses d
+  JOIN {FULL_SCHEMA}.encounters e ON d.encounter_id = e.encounter_id
+  JOIN {FULL_SCHEMA}.patients p ON e.patient_id = p.patient_id
+  JOIN condition_mapping cm ON UPPER(cm.condition) = UPPER(condition_name)
+  WHERE d.icd10_code LIKE cm.icd_pattern
+""")
 
 # COMMAND ----------
 
@@ -140,28 +142,29 @@ display(spark.sql(f"SELECT * FROM {FULL_SCHEMA}.get_diagnoses_by_condition('CHF'
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE OR REPLACE FUNCTION ${FULL_SCHEMA}.get_patient_readmission_history(patient_id STRING)
-# MAGIC RETURNS TABLE(
-# MAGIC   readmission_id STRING,
-# MAGIC   patient_id STRING,
-# MAGIC   original_discharge_date TIMESTAMP,
-# MAGIC   readmit_admission_date TIMESTAMP,
-# MAGIC   days_between INT,
-# MAGIC   is_30_day BOOLEAN
-# MAGIC )
-# MAGIC COMMENT 'Returns readmission history for a patient with 30-day CMS quality metric'
-# MAGIC RETURN
-# MAGIC   SELECT
-# MAGIC     readmission_id,
-# MAGIC     patient_id,
-# MAGIC     original_discharge_date,
-# MAGIC     readmit_admission_date,
-# MAGIC     days_between,
-# MAGIC     is_30_day
-# MAGIC   FROM ${FULL_SCHEMA}.readmissions
-# MAGIC   WHERE patient_id = get_patient_readmission_history.patient_id
-# MAGIC   ORDER BY original_discharge_date DESC;
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {FULL_SCHEMA}.get_patient_readmission_history(patient_id_param STRING)
+RETURNS TABLE(
+  readmission_id STRING,
+  patient_id STRING,
+  original_discharge_date TIMESTAMP,
+  readmit_admission_date TIMESTAMP,
+  days_between INT,
+  is_30_day BOOLEAN
+)
+COMMENT 'Returns readmission history for a patient with 30-day CMS quality metric'
+RETURN
+  SELECT
+    readmission_id,
+    patient_id,
+    original_discharge_date,
+    readmit_admission_date,
+    days_between,
+    is_30_day
+  FROM {FULL_SCHEMA}.readmissions
+  WHERE patient_id = patient_id_param
+  ORDER BY original_discharge_date DESC
+""")
 
 # COMMAND ----------
 
@@ -172,25 +175,26 @@ display(spark.sql(f"SELECT * FROM {FULL_SCHEMA}.get_diagnoses_by_condition('CHF'
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE OR REPLACE FUNCTION ${FULL_SCHEMA}.get_risk_score(patient_id STRING)
-# MAGIC RETURNS TABLE(
-# MAGIC   patient_id STRING,
-# MAGIC   risk_score DOUBLE,
-# MAGIC   risk_category STRING,
-# MAGIC   risk_factors STRING,
-# MAGIC   last_calculated TIMESTAMP
-# MAGIC )
-# MAGIC COMMENT 'Returns predictive readmission risk score (0.0-1.0 scale) and contributing factors'
-# MAGIC RETURN
-# MAGIC   SELECT
-# MAGIC     patient_id,
-# MAGIC     risk_score,
-# MAGIC     risk_category,
-# MAGIC     risk_factors,
-# MAGIC     last_calculated
-# MAGIC   FROM ${FULL_SCHEMA}.risk_scores
-# MAGIC   WHERE patient_id = get_risk_score.patient_id;
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {FULL_SCHEMA}.get_risk_score(patient_id_param STRING)
+RETURNS TABLE(
+  patient_id STRING,
+  risk_score DOUBLE,
+  risk_category STRING,
+  risk_factors STRING,
+  last_calculated TIMESTAMP
+)
+COMMENT 'Returns predictive readmission risk score (0.0-1.0 scale) and contributing factors'
+RETURN
+  SELECT
+    patient_id,
+    risk_score,
+    risk_category,
+    risk_factors,
+    last_calculated
+  FROM {FULL_SCHEMA}.risk_scores
+  WHERE patient_id = patient_id_param
+""")
 
 # COMMAND ----------
 
@@ -201,29 +205,30 @@ display(spark.sql(f"SELECT * FROM {FULL_SCHEMA}.get_diagnoses_by_condition('CHF'
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE OR REPLACE FUNCTION ${FULL_SCHEMA}.get_sdoh_barriers(patient_id STRING)
-# MAGIC RETURNS TABLE(
-# MAGIC   patient_id STRING,
-# MAGIC   housing_instability BOOLEAN,
-# MAGIC   transportation_barrier BOOLEAN,
-# MAGIC   food_insecurity BOOLEAN,
-# MAGIC   social_isolation BOOLEAN,
-# MAGIC   financial_strain BOOLEAN,
-# MAGIC   last_assessed TIMESTAMP
-# MAGIC )
-# MAGIC COMMENT 'Returns social determinants of health (SDOH) barriers affecting patient care'
-# MAGIC RETURN
-# MAGIC   SELECT
-# MAGIC     patient_id,
-# MAGIC     housing_instability,
-# MAGIC     transportation_barrier,
-# MAGIC     food_insecurity,
-# MAGIC     social_isolation,
-# MAGIC     financial_strain,
-# MAGIC     last_assessed
-# MAGIC   FROM ${FULL_SCHEMA}.sdoh
-# MAGIC   WHERE patient_id = get_sdoh_barriers.patient_id;
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {FULL_SCHEMA}.get_sdoh_barriers(patient_id_param STRING)
+RETURNS TABLE(
+  patient_id STRING,
+  housing_instability BOOLEAN,
+  transportation_barrier BOOLEAN,
+  food_insecurity BOOLEAN,
+  social_isolation BOOLEAN,
+  financial_strain BOOLEAN,
+  last_assessed TIMESTAMP
+)
+COMMENT 'Returns social determinants of health (SDOH) barriers affecting patient care'
+RETURN
+  SELECT
+    patient_id,
+    housing_instability,
+    transportation_barrier,
+    food_insecurity,
+    social_isolation,
+    financial_strain,
+    last_assessed
+  FROM {FULL_SCHEMA}.sdoh
+  WHERE patient_id = patient_id_param
+""")
 
 # COMMAND ----------
 
@@ -234,34 +239,35 @@ display(spark.sql(f"SELECT * FROM {FULL_SCHEMA}.get_diagnoses_by_condition('CHF'
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE OR REPLACE FUNCTION ${FULL_SCHEMA}.get_available_care_coordinators(specialty STRING)
-# MAGIC RETURNS TABLE(
-# MAGIC   coordinator_id STRING,
-# MAGIC   name STRING,
-# MAGIC   title STRING,
-# MAGIC   current_caseload INT,
-# MAGIC   max_caseload INT,
-# MAGIC   available_capacity INT,
-# MAGIC   specialties STRING,
-# MAGIC   years_experience INT
-# MAGIC )
-# MAGIC COMMENT 'Returns care coordinators with available capacity and optional specialty match'
-# MAGIC RETURN
-# MAGIC   SELECT
-# MAGIC     coordinator_id,
-# MAGIC     name,
-# MAGIC     title,
-# MAGIC     current_caseload,
-# MAGIC     max_caseload,
-# MAGIC     available_capacity,
-# MAGIC     specialties,
-# MAGIC     years_experience
-# MAGIC   FROM ${FULL_SCHEMA}.care_coordinators
-# MAGIC   WHERE active = TRUE
-# MAGIC     AND available_capacity > 0
-# MAGIC     AND (specialty IS NULL OR specialties LIKE CONCAT('%', specialty, '%'))
-# MAGIC   ORDER BY available_capacity DESC, years_experience DESC;
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {FULL_SCHEMA}.get_available_care_coordinators(specialty_param STRING)
+RETURNS TABLE(
+  coordinator_id STRING,
+  name STRING,
+  title STRING,
+  current_caseload INT,
+  max_caseload INT,
+  available_capacity INT,
+  specialties STRING,
+  years_experience INT
+)
+COMMENT 'Returns care coordinators with available capacity and optional specialty match'
+RETURN
+  SELECT
+    coordinator_id,
+    name,
+    title,
+    current_caseload,
+    max_caseload,
+    available_capacity,
+    specialties,
+    years_experience
+  FROM {FULL_SCHEMA}.care_coordinators
+  WHERE active = TRUE
+    AND available_capacity > 0
+    AND (specialty_param IS NULL OR specialties LIKE CONCAT('%', specialty_param, '%'))
+  ORDER BY available_capacity DESC, years_experience DESC
+""")
 
 # COMMAND ----------
 
