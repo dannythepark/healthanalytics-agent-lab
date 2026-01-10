@@ -158,7 +158,9 @@ complex_questions = [
             "get_patient_readmission_history",
             "get_risk_score",
             "get_sdoh_barriers",
-            "get_available_care_coordinators"
+            "get_available_care_coordinators",
+            "calculate_priority_score",
+            "generate_outreach_report"
         ],
         "complexity": "complex"
     },
@@ -173,7 +175,8 @@ complex_questions = [
         "expected_tools": [
             "get_risk_score",
             "get_available_care_coordinators",
-            "suggest_coordinator_for_patient"
+            "suggest_coordinator_for_patient",
+            "calculate_priority_score"
         ],
         "complexity": "complex"
     },
@@ -297,9 +300,9 @@ display(eval_df.head())
 # COMMAND ----------
 
 # Save to Delta table for reuse
-import sys
-sys.path.append("../00_setup")
-from config import FULL_SCHEMA
+# MAGIC %run ../00_setup/00_config
+
+# COMMAND ----------
 
 # Save evaluation dataset
 eval_table_name = f"{FULL_SCHEMA}.agent_eval_dataset"

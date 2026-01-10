@@ -45,6 +45,10 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
+# MAGIC %run ./00_config
+
+# COMMAND ----------
+
 from pyspark.sql import Row
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
@@ -66,18 +70,7 @@ print("✅ Libraries imported successfully")
 # MAGIC %md
 # MAGIC ## Configuration
 # MAGIC
-# MAGIC **⚠️ IMPORTANT: Update the CATALOG name below!**
-
-# COMMAND ----------
-
-# Configuration - UPDATE THIS!
-CATALOG = "danny_park"  # ← Change to your catalog name
-SCHEMA = "healthanalytics_ai"
-FULL_SCHEMA = f"{CATALOG}.{SCHEMA}"
-
-# Create schema if it doesn't exist
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {FULL_SCHEMA}")
-print(f"✅ Using schema: {FULL_SCHEMA}")
+# MAGIC **⚠️ Shared configuration loaded from 00_config**
 
 # COMMAND ----------
 
@@ -86,11 +79,11 @@ print(f"✅ Using schema: {FULL_SCHEMA}")
 
 # COMMAND ----------
 
-print("Generating 10,000 patients...")
+print(f"Generating {DATA_CONFIG['patients']:,} patients...")
 
 # Generate patients using Row objects (more compatible with Serverless)
 patients_rows = []
-for i in range(10_000):
+for i in range(DATA_CONFIG['patients']):
     gender = random.choice(["M", "F", "Other"])
 
     if gender == "M":
@@ -129,7 +122,7 @@ print(f"✅ Created {FULL_SCHEMA}.patients with {patients_df.count():,} records"
 
 # COMMAND ----------
 
-print("Generating 50,000 encounters...")
+print(f"Generating {DATA_CONFIG['encounters']:,} encounters...")
 
 # Read patients to get IDs (using Spark operations, not collect)
 patient_ids_df = spark.table(f"{FULL_SCHEMA}.patients").select("patient_id")
@@ -143,12 +136,14 @@ facilities = [
 encounters_rows = []
 encounter_counter = 1
 
-# STEP 1: Plant 127 recent discharges (last 7 days)
-print("  → Planting 127 recent discharges...")
-demo_patients = random.sample(patient_ids, 127)
+# STEP 1: Plant recent discharges
+recent_count = DEMO_CONFIG["recent_discharge_count"]
+recent_days = DEMO_CONFIG["recent_discharges_days"]
+print(f"  → Planting {recent_count} recent discharges (last {recent_days} days)...")
+demo_patients = random.sample(patient_ids, recent_count)
 
 for patient_id in demo_patients:
-    discharge_date = fake.date_time_between(start_date="-7d", end_date="now")
+    discharge_date = fake.date_time_between(start_date=f"-{recent_days}d", end_date="now")
     length_of_stay = random.randint(1, 14)
     admission_date = discharge_date - timedelta(days=length_of_stay)
 
@@ -166,10 +161,11 @@ for patient_id in demo_patients:
     encounter_counter += 1
 
 # STEP 2: Generate remaining historical encounters
-print("  → Generating 49,873 historical encounters...")
-for _ in range(50_000 - 127):
+historical_count = DATA_CONFIG['encounters'] - recent_count
+print(f"  → Generating {historical_count:,} historical encounters...")
+for _ in range(historical_count):
     patient_id = random.choice(patient_ids)
-    admission_date = fake.date_time_between(start_date="-3y", end_date="-8d")
+    admission_date = fake.date_time_between(start_date="-3y", end_date=f"-{recent_days+1}d")
     length_of_stay = random.randint(1, 30)
     discharge_date = admission_date + timedelta(days=length_of_stay)
 
@@ -198,7 +194,7 @@ print(f"✅ Created {FULL_SCHEMA}.encounters with 50,000 records")
 
 # COMMAND ----------
 
-print("Generating 150,000 diagnoses...")
+print(f"Generating {DATA_CONFIG['diagnoses']:,} diagnoses...")
 
 all_encounter_ids = [row.encounter_id for row in spark.table(f"{FULL_SCHEMA}.encounters").select("encounter_id").collect()]
 recent_encounter_ids = [
@@ -222,9 +218,10 @@ common_diagnoses = [
 diagnoses_rows = []
 diagnosis_counter = 1
 
-# STEP 1: Plant 23 CHF patients
-print("  → Planting 23 CHF patients...")
-chf_encounters = random.sample(recent_encounter_ids, 23)
+# STEP 1: Plant CHF patients
+chf_count = DEMO_CONFIG["chf_patient_count"]
+print(f"  → Planting {chf_count} CHF patients...")
+chf_encounters = random.sample(recent_encounter_ids, builtins.min(chf_count, len(recent_encounter_ids)))
 
 for encounter_id in chf_encounters:
     icd10, description = random.choice([d for d in common_diagnoses if d[0].startswith("I50")])
@@ -234,16 +231,17 @@ for encounter_id in chf_encounters:
         icd10_code=icd10,
         description=description,
         is_primary=True,
-        diagnosis_date=fake.date_time_between(start_date="-7d", end_date="now"),
+        diagnosis_date=fake.date_time_between(start_date=f"-{DEMO_CONFIG['recent_discharges_days']}d", end_date="now"),
         is_demo_chf=True,
         is_demo_copd=False
     ))
     diagnosis_counter += 1
 
-# STEP 2: Plant 19 COPD patients
-print("  → Planting 19 COPD patients...")
+# STEP 2: Plant COPD patients
+copd_count = DEMO_CONFIG["copd_patient_count"]
+print(f"  → Planting {copd_count} COPD patients...")
 remaining_recent = [e for e in recent_encounter_ids if e not in chf_encounters]
-copd_encounters = random.sample(remaining_recent, 19)
+copd_encounters = random.sample(remaining_recent, builtins.min(copd_count, len(remaining_recent)))
 
 for encounter_id in copd_encounters:
     icd10, description = random.choice([d for d in common_diagnoses if d[0].startswith("J44")])
@@ -253,17 +251,18 @@ for encounter_id in copd_encounters:
         icd10_code=icd10,
         description=description,
         is_primary=True,
-        diagnosis_date=fake.date_time_between(start_date="-7d", end_date="now"),
+        diagnosis_date=fake.date_time_between(start_date=f"-{DEMO_CONFIG['recent_discharges_days']}d", end_date="now"),
         is_demo_chf=False,
         is_demo_copd=True
     ))
     diagnosis_counter += 1
 
-# STEP 3: Generate remaining diagnoses (in batches for better performance)
+# STEP 3: Generate remaining diagnoses
 print("  → Generating remaining diagnoses...")
+total_diagnoses = DATA_CONFIG['diagnoses']
 batch_size = 10000
-while len(diagnoses_rows) < 150_000:
-    for _ in range(builtins.min(batch_size, 150_000 - len(diagnoses_rows))):
+while len(diagnoses_rows) < total_diagnoses:
+    for _ in range(builtins.min(batch_size, total_diagnoses - len(diagnoses_rows))):
         encounter_id = random.choice(all_encounter_ids)
         icd10, description = random.choice(common_diagnoses)
 
@@ -282,7 +281,7 @@ while len(diagnoses_rows) < 150_000:
 diagnoses_df = spark.createDataFrame(diagnoses_rows)
 diagnoses_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{FULL_SCHEMA}.diagnoses")
 
-print(f"✅ Created {FULL_SCHEMA}.diagnoses with 150,000 records")
+print(f"✅ Created {FULL_SCHEMA}.diagnoses with {total_diagnoses:,} records")
 
 # COMMAND ----------
 
@@ -291,81 +290,90 @@ print(f"✅ Created {FULL_SCHEMA}.diagnoses with 150,000 records")
 
 # COMMAND ----------
 
-print("Generating 5,000 readmissions...")
+print(f"Generating {DATA_CONFIG['readmissions']:,} readmissions using optimized Spark SQL...")
 
-# Use Spark SQL to find patients with multiple encounters
-multi_encounter_patients = spark.sql(f"""
-    SELECT patient_id, COUNT(*) as encounter_count
-    FROM {FULL_SCHEMA}.encounters
-    GROUP BY patient_id
-    HAVING COUNT(*) >= 2
-""").collect()
+# Use pure Spark SQL to generate readmissions - much faster!
+# This creates all readmissions in one query instead of looping
+spark.sql(f"""
+    CREATE OR REPLACE TABLE {FULL_SCHEMA}.readmissions AS
+    WITH ranked_encounters AS (
+        SELECT
+            patient_id,
+            encounter_id,
+            admission_date,
+            discharge_date,
+            is_demo_recent_discharge,
+            ROW_NUMBER() OVER (PARTITION BY patient_id ORDER BY admission_date) as enc_num,
+            COUNT(*) OVER (PARTITION BY patient_id) as total_encs
+        FROM {FULL_SCHEMA}.encounters
+    ),
+    encounter_pairs AS (
+        SELECT
+            e1.patient_id,
+            e1.encounter_id as original_encounter_id,
+            e2.encounter_id as readmit_encounter_id,
+            e1.discharge_date as original_discharge_date,
+            e2.admission_date as readmit_admission_date,
+            DATEDIFF(e2.admission_date, e1.discharge_date) as days_between,
+            e1.enc_num,
+            e2.enc_num as readmit_enc_num,
+            e2.is_demo_recent_discharge
+        FROM ranked_encounters e1
+        JOIN ranked_encounters e2
+            ON e1.patient_id = e2.patient_id
+            AND e2.enc_num = e1.enc_num + 1
+        WHERE e1.total_encs >= 2
+            AND e2.admission_date > e1.discharge_date
+            AND DATEDIFF(e2.admission_date, e1.discharge_date) <= 365
+    )
+    SELECT
+        CONCAT('readmit-', LPAD(CAST(ROW_NUMBER() OVER (ORDER BY patient_id, days_between) AS STRING), 7, '0')) as readmission_id,
+        patient_id,
+        original_encounter_id,
+        readmit_encounter_id,
+        original_discharge_date,
+        readmit_admission_date,
+        days_between,
+        CASE WHEN days_between <= 30 THEN TRUE ELSE FALSE END as is_30_day,
+        FALSE as is_demo_readmission,
+        is_demo_recent_discharge
+    FROM encounter_pairs
+    LIMIT {DATA_CONFIG['readmissions']}
+""")
 
-patient_with_multiple = [row.patient_id for row in multi_encounter_patients]
+# Now update records to be demo readmissions with 30-day flag
+readmit_count = DEMO_CONFIG["prior_readmission_count"]
+print(f"  → Marking {readmit_count} as demo 30-day readmissions...")
+spark.sql(f"""
+    CREATE OR REPLACE TABLE {FULL_SCHEMA}.readmissions AS
+    WITH marked_readmissions AS (
+        SELECT
+            *,
+            ROW_NUMBER() OVER (ORDER BY is_demo_recent_discharge DESC, RAND()) as row_num,
+            CAST(FLOOR(RAND() * 30) + 1 AS INT) as random_days
+        FROM {FULL_SCHEMA}.readmissions
+    )
+    SELECT
+        readmission_id,
+        patient_id,
+        original_encounter_id,
+        readmit_encounter_id,
+        original_discharge_date,
+        CASE
+            WHEN row_num <= {readmit_count} THEN DATE_ADD(original_discharge_date, random_days)
+            ELSE readmit_admission_date
+        END as readmit_admission_date,
+        CASE
+            WHEN row_num <= {readmit_count} THEN random_days
+            ELSE days_between
+        END as days_between,
+        CASE WHEN row_num <= {readmit_count} THEN TRUE ELSE is_30_day END as is_30_day,
+        CASE WHEN row_num <= {readmit_count} THEN TRUE ELSE FALSE END as is_demo_readmission
+    FROM marked_readmissions
+""")
 
-readmissions_rows = []
-readmission_counter = 1
-
-# Plant 32 patients with 30-day readmissions
-print("  → Planting 32 patients with 30-day readmissions...")
-demo_readmit_patients = random.sample(patient_with_multiple, builtins.min(32, len(patient_with_multiple)))
-
-for patient_id in demo_readmit_patients:
-    patient_encs = spark.table(f"{FULL_SCHEMA}.encounters").filter(
-        col("patient_id") == patient_id
-    ).orderBy("admission_date").collect()
-
-    if len(patient_encs) >= 2:
-        original = patient_encs[-2]
-        readmit = patient_encs[-1]
-        days_between = random.randint(1, 30)
-
-        readmissions_rows.append(Row(
-            readmission_id=f"readmit-{str(readmission_counter).zfill(7)}",
-            patient_id=patient_id,
-            original_encounter_id=original.encounter_id,
-            readmit_encounter_id=readmit.encounter_id,
-            original_discharge_date=original.discharge_date,
-            readmit_admission_date=readmit.admission_date,
-            days_between=days_between,
-            is_30_day=True,
-            is_demo_readmission=True
-        ))
-        readmission_counter += 1
-
-# Generate remaining readmissions
-print("  → Generating remaining readmissions...")
-remaining_patients = [p for p in patient_with_multiple if p not in demo_readmit_patients]
-
-for patient_id in random.sample(remaining_patients, builtins.min(5_000 - len(readmissions_rows), len(remaining_patients))):
-    patient_encs = spark.table(f"{FULL_SCHEMA}.encounters").filter(
-        col("patient_id") == patient_id
-    ).orderBy("admission_date").collect()
-
-    if len(patient_encs) >= 2:
-        original = patient_encs[0]
-        readmit = patient_encs[-1]
-
-        if readmit.admission_date > original.discharge_date:
-            days_between = (readmit.admission_date - original.discharge_date).days
-
-            readmissions_rows.append(Row(
-                readmission_id=f"readmit-{str(readmission_counter).zfill(7)}",
-                patient_id=patient_id,
-                original_encounter_id=original.encounter_id,
-                readmit_encounter_id=readmit.encounter_id,
-                original_discharge_date=original.discharge_date,
-                readmit_admission_date=readmit.admission_date,
-                days_between=days_between,
-                is_30_day=(days_between <= 30),
-                is_demo_readmission=False
-            ))
-            readmission_counter += 1
-
-readmissions_df = spark.createDataFrame(readmissions_rows)
-readmissions_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{FULL_SCHEMA}.readmissions")
-
-print(f"✅ Created {FULL_SCHEMA}.readmissions with {len(readmissions_rows):,} records")
+readmission_count = spark.table(f"{FULL_SCHEMA}.readmissions").count()
+print(f"✅ Created {FULL_SCHEMA}.readmissions with {readmission_count:,} records")
 
 # COMMAND ----------
 
@@ -374,7 +382,7 @@ print(f"✅ Created {FULL_SCHEMA}.readmissions with {len(readmissions_rows):,} r
 
 # COMMAND ----------
 
-print("Generating 10,000 risk scores...")
+print(f"Generating {DATA_CONFIG['risk_scores']:,} risk scores...")
 
 all_patient_ids = [row.patient_id for row in spark.table(f"{FULL_SCHEMA}.patients").select("patient_id").collect()]
 
@@ -391,12 +399,14 @@ chf_copd_patient_ids = [
 
 risk_scores_rows = []
 
-# Plant 18 high-risk patients
-print("  → Planting 18 high-risk patients (score > 0.7)...")
-high_risk_patients = random.sample(chf_copd_patient_ids, builtins.min(18, len(chf_copd_patient_ids)))
+# Plant high-risk patients
+hr_count = DEMO_CONFIG["high_risk_count"]
+hr_threshold = DEMO_CONFIG["high_risk_threshold"]
+print(f"  → Planting {hr_count} high-risk patients (score > {hr_threshold})...")
+high_risk_patients = random.sample(chf_copd_patient_ids, builtins.min(hr_count, len(chf_copd_patient_ids)))
 
 for patient_id in high_risk_patients:
-    risk_score = builtins.round(random.uniform(0.71, 0.95), 3)
+    risk_score = builtins.round(random.uniform(hr_threshold + 0.01, 0.95), 3)
     risk_factors = random.sample([
         "Prior 30-day readmission",
         "CHF/COPD diagnosis",
@@ -420,10 +430,11 @@ for patient_id in high_risk_patients:
 print("  → Generating remaining risk scores...")
 used_patients = set(high_risk_patients)
 remaining_patients = [p for p in all_patient_ids if p not in used_patients]
+total_risk_scores = DATA_CONFIG['risk_scores']
 
-for patient_id in remaining_patients[:10_000 - len(high_risk_patients)]:
+for patient_id in remaining_patients[:total_risk_scores - len(high_risk_patients)]:
     risk_score = builtins.round(random.triangular(0.1, 0.8, 0.3), 3)
-    category = "Low" if risk_score < 0.3 else "Moderate" if risk_score < 0.7 else "High"
+    category = "Low" if risk_score < 0.3 else "Moderate" if risk_score < hr_threshold else "High"
 
     risk_scores_rows.append(Row(
         patient_id=patient_id,
@@ -447,7 +458,7 @@ print(f"✅ Created {FULL_SCHEMA}.risk_scores with {len(risk_scores_rows):,} rec
 
 # COMMAND ----------
 
-print("Generating 8,000 SDOH records...")
+print(f"Generating {DATA_CONFIG['sdoh']:,} SDOH records...")
 
 high_risk_patient_ids = [
     row.patient_id
@@ -456,9 +467,10 @@ high_risk_patient_ids = [
 
 sdoh_rows = []
 
-# Plant 5 with transportation barriers
-print("  → Planting 5 patients with transportation barriers...")
-transport_patients = random.sample(high_risk_patient_ids, builtins.min(5, len(high_risk_patient_ids)))
+# Plant transportation barriers
+trans_count = DEMO_CONFIG["transportation_barrier_count"]
+print(f"  → Planting {trans_count} patients with transportation barriers...")
+transport_patients = random.sample(high_risk_patient_ids, builtins.min(trans_count, len(high_risk_patient_ids)))
 
 for patient_id in transport_patients:
     sdoh_rows.append(Row(
@@ -472,10 +484,11 @@ for patient_id in transport_patients:
         last_assessed=fake.date_time_between(start_date="-30d", end_date="now")
     ))
 
-# Plant 3 with housing instability
-print("  → Planting 3 patients with housing instability...")
+# Plant housing instability
+housing_count = DEMO_CONFIG["housing_instability_count"]
+print(f"  → Planting {housing_count} patients with housing instability...")
 remaining_high_risk = [p for p in high_risk_patient_ids if p not in transport_patients]
-housing_patients = random.sample(remaining_high_risk, builtins.min(3, len(remaining_high_risk)))
+housing_patients = random.sample(remaining_high_risk, builtins.min(housing_count, len(remaining_high_risk)))
 
 for patient_id in housing_patients:
     sdoh_rows.append(Row(
@@ -493,8 +506,9 @@ for patient_id in housing_patients:
 print("  → Generating remaining SDOH records...")
 used_patients = set(transport_patients + housing_patients)
 remaining = [p for p in all_patient_ids if p not in used_patients]
+total_sdoh = DATA_CONFIG['sdoh']
 
-for patient_id in remaining[:8_000 - len(sdoh_rows)]:
+for patient_id in remaining[:total_sdoh - len(sdoh_rows)]:
     num_barriers = random.choices([0, 1, 2, 3], weights=[40, 30, 20, 10])[0]
     all_barriers = ["housing_instability", "transportation_barrier", "food_insecurity",
                     "social_isolation", "financial_strain", "utility_assistance_needed"]
@@ -524,7 +538,7 @@ print(f"✅ Created {FULL_SCHEMA}.sdoh with {len(sdoh_rows):,} records")
 
 # COMMAND ----------
 
-print("Generating 15 care coordinators...")
+print(f"Generating {DATA_CONFIG['care_coordinators']:,} care coordinators...")
 
 coordinators_rows = [
     Row(coordinator_id="coord-001", name="Sarah Johnson, RN", title="Senior Care Coordinator",
@@ -549,7 +563,8 @@ coordinators_rows = [
         active=True, is_demo_coordinator=False),
 ]
 
-# Add 10 more coordinators
+# Add more coordinators
+total_coords = DATA_CONFIG['care_coordinators']
 more_coords = [
     ("coord-006", "James Wilson, MSW", 30, ["Behavioral Health"], 7),
     ("coord-007", "Maria Garcia, RN", 24, ["Nephrology"], 9),
@@ -563,7 +578,7 @@ more_coords = [
     ("coord-015", "Nancy Thomas, MSW", 19, ["Pain Management"], 9),
 ]
 
-for coord_id, name, caseload, specialties, experience in more_coords:
+for coord_id, name, caseload, specialties, experience in more_coords[:total_coords - 5]:
     coordinators_rows.append(Row(
         coordinator_id=coord_id, name=name, title="Care Coordinator",
         current_caseload=caseload, max_caseload=30, available_capacity=30-caseload,

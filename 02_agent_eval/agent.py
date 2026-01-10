@@ -30,15 +30,14 @@
 
 # COMMAND ----------
 
+# MAGIC %run ../00_setup/00_config
+
+# COMMAND ----------
+
 import mlflow
 from databricks import agents
 from databricks.sdk import WorkspaceClient
 import pandas as pd
-
-# Import configuration
-import sys
-sys.path.append("../00_setup")
-from config import CATALOG, SCHEMA, FULL_SCHEMA, FOUNDATION_MODEL
 
 # COMMAND ----------
 
@@ -63,6 +62,8 @@ TOOLS = [
     {"name": f"{FULL_SCHEMA}.get_sdoh_barriers", "type": "uc_function"},
     {"name": f"{FULL_SCHEMA}.get_available_care_coordinators", "type": "uc_function"},
     {"name": f"{FULL_SCHEMA}.suggest_coordinator_for_patient", "type": "uc_function"},
+    {"name": f"{FULL_SCHEMA}.calculate_priority_score", "type": "uc_function"},
+    {"name": f"{FULL_SCHEMA}.generate_outreach_report", "type": "uc_function"},
 ]
 
 print(f"Agent will use {len(TOOLS)} Unity Catalog functions")

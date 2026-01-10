@@ -35,7 +35,7 @@
 # ========================================
 # REQUIRED: Update this with your catalog name
 # ========================================
-CATALOG = "your_catalog_name"  # TODO: Replace with your Unity Catalog name
+CATALOG = "danny_park"  # Updated to danny_park
 
 # Schema name (will be auto-created)
 SCHEMA = "healthanalytics_ai"

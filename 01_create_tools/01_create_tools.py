@@ -29,10 +29,9 @@
 
 # COMMAND ----------
 
-# Import configuration
-import sys
-sys.path.append("../00_setup")
-from config import CATALOG, SCHEMA, FULL_SCHEMA
+# MAGIC %run ../00_setup/00_config
+
+# COMMAND ----------
 
 print(f"Creating functions in: {FULL_SCHEMA}")
 
@@ -561,9 +560,14 @@ def generate_outreach_report(patient_ids: list) -> str:
 
     return report
 
-# Register as a callable Python function
-spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
+# Register as a callable Unity Catalog function
+@udf(returnType=StringType())
+def generate_outreach_report_udf(patient_ids: list) -> str:
+    return generate_outreach_report(patient_ids)
 
+spark.udf.register(f"{FULL_SCHEMA}.generate_outreach_report", generate_outreach_report_udf)
+
+print(f"✅ Registered Python UDF: {FULL_SCHEMA}.generate_outreach_report")
 print("✅ Created Python function: generate_outreach_report()")
 
 # COMMAND ----------

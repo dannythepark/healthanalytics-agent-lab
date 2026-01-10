@@ -38,10 +38,7 @@ from databricks.sdk.service.serving import ServedEntityInput, EndpointCoreConfig
 import time
 import requests
 
-# Import configuration
-import sys
-sys.path.append("../00_setup")
-from config import CATALOG, SCHEMA, FULL_SCHEMA, SERVING_ENDPOINT_NAME
+# MAGIC %run ../00_setup/00_config
 
 # COMMAND ----------
 

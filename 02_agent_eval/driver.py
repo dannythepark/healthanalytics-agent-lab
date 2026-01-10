@@ -26,15 +26,14 @@
 
 # COMMAND ----------
 
+# MAGIC %run ../00_setup/00_config
+
+# COMMAND ----------
+
 import mlflow
 from databricks import agents
 import pandas as pd
 import json
-
-# Import configuration
-import sys
-sys.path.append("../00_setup")
-from config import CATALOG, SCHEMA, FULL_SCHEMA
 
 # COMMAND ----------
 
@@ -285,11 +284,23 @@ def evaluate_agent(agent_name: str, eval_dataset: pd.DataFrame):
             expected_facts = json.loads(row["expected_facts"])
             expected_tools = json.loads(row["expected_tools"])
 
-            # Get agent response (this would come from MLflow in practice)
-            # For demo purposes, we'll skip actual prediction here
-
-            # Placeholder response for judge testing
-            response = "Sample response"  # In practice: agent.predict(request)
+            # Get agent response using MLflow's loaded model
+            try:
+                # Load agent for each request to ensure fresh state if needed
+                # In production, you'd load it once outside the loop
+                loaded_model = mlflow.databricks.load_model(agent_uri)
+                response_obj = loaded_model.predict({"messages": [{"role": "user", "content": request}]})
+                
+                # Extract text response - handle different response formats
+                if isinstance(response_obj, dict) and "choices" in response_obj:
+                    response = response_obj["choices"][0]["message"]["content"]
+                elif hasattr(response_obj, "content"):
+                    response = response_obj.content
+                else:
+                    response = str(response_obj)
+            except Exception as e:
+                print(f"❌ Error predicting for question {row['request_id']}: {e}")
+                response = f"Error: {str(e)}"
 
             # Apply judges
             clinical_score = clinical_accuracy_judge(response, expected_facts)
