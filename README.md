@@ -1,3 +1,9 @@
+---
+noteId: "040deb60f00111f0a5d80ba1419066d8"
+tags: []
+
+---
+
 # HealthAnalytics AI: Clinical Agent Workshop
 
 **From 4-6 hours to 60 seconds: Clinical insights at the speed of care**

@@ -1,3 +1,9 @@
+---
+noteId: "040deb61f00111f0a5d80ba1419066d8"
+tags: []
+
+---
+
 # 🚀 Quick Start: Import to Databricks
 
 ## Option 1: Import via Databricks Repos (Recommended)
